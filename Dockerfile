@@ -11,54 +11,29 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set work directory
 WORKDIR /app
 
-# Install system dependencies for document processing and Arabic text support
+# Install minimal system dependencies only
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    # Basic system tools
+    # Essential tools
     curl \
     wget \
-    git \
     ca-certificates \
-    # Build tools (install first to avoid conflicts)
-    build-essential \
+    # Build tools for Python packages
     gcc \
     g++ \
-    # Image processing dependencies
+    # Image processing (minimal)
     libpng-dev \
     libjpeg-dev \
-    libfreetype6-dev \
-    liblcms2-dev \
-    libwebp-dev \
     zlib1g-dev \
-    # PDF processing dependencies
-    libpoppler-cpp-dev \
-    poppler-utils \
     # Clean up cache
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# Install fonts and LibreOffice in a separate layer to avoid conflicts
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    # Document processing dependencies
-    libreoffice-writer \
-    libreoffice-common \
-    # Font packages
-    fonts-liberation \
-    fonts-dejavu \
-    fonts-noto \
-    fonts-noto-color-emoji \
-    fonts-arabic \
-    # Clean up cache
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && fc-cache -fv
 
 # Create logs directory
 RUN mkdir -p /app/logs
 
 # Copy requirements first for better Docker layer caching
-COPY requirements.txt .
+COPY requirements.docker.txt requirements.txt ./
 
 # Create virtual environment and install Python dependencies
 RUN python -m venv /opt/venv
@@ -67,8 +42,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Upgrade pip and install wheel
 RUN pip install --upgrade pip setuptools wheel
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies with increased timeout and retries
+RUN pip install --no-cache-dir --timeout 600 --retries 5 -r requirements.docker.txt
 
 # Copy application code
 COPY . .

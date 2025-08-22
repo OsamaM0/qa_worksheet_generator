@@ -26,6 +26,7 @@ if not exist logs mkdir logs
 REM Start with Docker Compose
 if exist docker-compose.yml (
     echo 🐳 Starting with Docker Compose...
+    echo 💡 If build fails, try: docker-compose -f docker-compose.yml build --build-arg DOCKERFILE=Dockerfile.minimal
     docker-compose up -d
     
     if %ERRORLEVEL% EQU 0 (

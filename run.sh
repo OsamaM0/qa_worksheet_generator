@@ -27,6 +27,7 @@ mkdir -p logs
 # Start with Docker Compose
 if [ -f docker-compose.yml ]; then
     echo "🐳 Starting with Docker Compose..."
+    echo "💡 If build fails, edit docker-compose.yml to use dockerfile: Dockerfile.minimal"
     docker-compose up -d
     
     if [ $? -eq 0 ]; then
