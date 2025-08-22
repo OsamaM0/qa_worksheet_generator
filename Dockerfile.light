@@ -1,4 +1,4 @@
-# Use Python 3.11 slim image as base (more recent and secure)
+# Lightweight alternative Dockerfile for QA Worksheet Generator
 FROM python:3.11-slim
 
 # Set environment variables
@@ -11,48 +11,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set work directory
 WORKDIR /app
 
-# Install system dependencies for document processing and Arabic text support
+# Install minimal system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    # Basic system tools
     curl \
     wget \
-    git \
     ca-certificates \
-    # Build tools (install first to avoid conflicts)
-    build-essential \
+    # Minimal build tools for Python packages
     gcc \
     g++ \
-    # Image processing dependencies
+    # Basic image processing
     libpng-dev \
     libjpeg-dev \
-    libfreetype6-dev \
-    liblcms2-dev \
-    libwebp-dev \
     zlib1g-dev \
-    # PDF processing dependencies
-    libpoppler-cpp-dev \
-    poppler-utils \
-    # Clean up cache
+    # Clean up
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# Install fonts and LibreOffice in a separate layer to avoid conflicts
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    # Document processing dependencies
-    libreoffice-writer \
-    libreoffice-common \
-    # Font packages
-    fonts-liberation \
-    fonts-dejavu \
-    fonts-noto \
-    fonts-noto-color-emoji \
-    fonts-arabic \
-    # Clean up cache
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && fc-cache -fv
 
 # Create logs directory
 RUN mkdir -p /app/logs
@@ -67,8 +41,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Upgrade pip and install wheel
 RUN pip install --upgrade pip setuptools wheel
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies with timeout and retry
+RUN pip install --no-cache-dir --timeout 300 --retries 3 -r requirements.txt
 
 # Copy application code
 COPY . .
