@@ -1,31 +1,21 @@
-# Docker Compose for Saudi Edu Worksheet Generator
 version: '3.8'
 
 services:
-  worksheet-generator:
+  qa-worksheet-generator:
     build: .
+    container_name: qa_worksheet_generator
     ports:
       - "8081:8081"
     environment:
-      # MongoDB Configuration (from .env file)
-      - MONGO_URI=${MONGO_URI:-mongodb://ai:VgjVpcllJjhYy2c@65.109.31.94:27017/ien?authSource=ien}
-      - MONGO_DB_NAME=${MONGO_DB_NAME:-ien}
-      
-      # API Configuration
       - HOST=0.0.0.0
       - PORT=8081
-      - DEBUG=False
-      
-      # Feature Configuration
-      - ENABLE_PDF_GENERATION=${ENABLE_PDF_GENERATION:-true}
-      
+      - MONGO_URI=${MONGO_URI:-mongodb://ai:VgjVpcllJjhYy2c@65.109.31.94:27017/ien?authSource=ien}
+      - DB_NAME=${DB_NAME:-ien}
     volumes:
-      # Mount logo file (read-only)
-      - ./logo.png:/app/logo.png:ro
-      # Mount temp directory for file operations
-      - worksheet_temp:/tmp/worksheet_temp
-      # Mount logs directory
+      # Mount logs for persistence
       - ./logs:/app/logs
+      # Mount logo if you have a local one
+      - ./logo.png:/app/logo.png
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/docs"]
@@ -34,38 +24,27 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - worksheet-net
-    # Security constraints
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/tmp
+      - qa-worksheet-network
+
+  # Optional: MongoDB container for local development
+  # Uncomment if you want to run MongoDB locally instead of using the remote one
+  # mongodb:
+  #   image: mongo:7.0
+  #   container_name: qa_mongodb
+  #   ports:
+  #     - "27017:27017"
+  #   environment:
+  #     - MONGO_INITDB_ROOT_USERNAME=admin
+  #     - MONGO_INITDB_ROOT_PASSWORD=password
+  #     - MONGO_INITDB_DATABASE=ien
+  #   volumes:
+  #     - mongodb_data:/data/db
+  #   networks:
+  #     - qa-worksheet-network
 
 networks:
-  worksheet-net:
+  qa-worksheet-network:
     driver: bridge
 
-volumes:
-  worksheet_temp:
-
-# Optional: Add MongoDB service for local development
-# Uncomment the following if you want to run MongoDB locally
-#
-#  mongodb:
-#    image: mongo:7.0
-#    ports:
-#      - "27017:27017"
-#    environment:
-#      - MONGO_INITDB_ROOT_USERNAME=admin
-#      - MONGO_INITDB_ROOT_PASSWORD=password
-#      - MONGO_INITDB_DATABASE=ien
-#    volumes:
-#      - mongodb_data:/data/db
-#    networks:
-#      - worksheet-net
-#    restart: unless-stopped
-#
-#volumes:
-#  mongodb_data:
+# volumes:
+#   mongodb_data:
