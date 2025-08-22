@@ -4,9 +4,10 @@ services:
   qa-worksheet-generator:
     build: 
       context: .
-      dockerfile: Dockerfile
-      # Alternative minimal dockerfile if main build fails:
+      dockerfile: Dockerfile.bulletproof
+      # Alternative dockerfiles if build fails:
       # dockerfile: Dockerfile.minimal
+      # dockerfile: Dockerfile
     container_name: qa_worksheet_generator
     ports:
       - "8081:8081"

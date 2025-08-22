@@ -1,32 +1,32 @@
-# Minimal requirements for Docker deployment
+# Ultra-minimal requirements for Docker deployment
 # Saudi Edu Worksheet Generator Requirements
 
 # Core FastAPI and web framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+fastapi>=0.100.0
+uvicorn>=0.20.0
 
 # MongoDB integration
-pymongo==4.6.0
+pymongo>=4.0.0
 
 # Document processing (essential)
-python-docx==1.1.0
+python-docx>=1.0.0
 
 # PDF processing and generation (core only)
-reportlab==4.0.0
-PyPDF2==3.0.1
+reportlab>=4.0.0
+PyPDF2>=3.0.0
 
 # Arabic text support
-arabic-reshaper==3.0.0
-python-bidi==0.4.2
+arabic-reshaper>=2.0.0
+python-bidi>=0.4.0
 
 # Image processing (minimal version)
-Pillow==10.0.0
+Pillow>=9.0.0
 
 # Environment variables
-python-dotenv==1.0.0
+python-dotenv>=1.0.0
 
 # HTTP client for health checks
-requests==2.31.0
+requests>=2.25.0
 
 # Additional utilities
-tqdm==4.66.5
+tqdm>=4.60.0

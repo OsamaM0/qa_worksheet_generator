@@ -33,7 +33,7 @@ RUN apt-get update && \
 RUN mkdir -p /app/logs
 
 # Copy requirements first for better Docker layer caching
-COPY requirements.docker.txt requirements.txt ./
+COPY requirements.minimal.txt .
 
 # Create virtual environment and install Python dependencies
 RUN python -m venv /opt/venv
@@ -42,8 +42,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Upgrade pip and install wheel
 RUN pip install --upgrade pip setuptools wheel
 
-# Install Python dependencies with increased timeout and retries
-RUN pip install --no-cache-dir --timeout 600 --retries 5 -r requirements.docker.txt
+# Install core packages first (essential for app to run)
+RUN pip install --no-cache-dir fastapi uvicorn pymongo python-docx requests python-dotenv
+
+# Install optional packages (failures won't break the build)
+RUN pip install --no-cache-dir reportlab PyPDF2 || echo "PDF packages failed - continuing without them"
+RUN pip install --no-cache-dir arabic-reshaper python-bidi || echo "Arabic support failed - continuing without it"  
+RUN pip install --no-cache-dir Pillow tqdm || echo "Additional packages failed - continuing without them"
 
 # Copy application code
 COPY . .

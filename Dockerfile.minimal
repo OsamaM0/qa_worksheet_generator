@@ -21,11 +21,11 @@ RUN apt-get update && \
 RUN mkdir -p /app/logs
 
 # Copy minimal requirements
-COPY requirements.docker.txt .
+COPY requirements.minimal.txt .
 
-# Install Python dependencies
+# Install Python dependencies directly (no virtual environment)
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.docker.txt
+    pip install --no-cache-dir -r requirements.minimal.txt
 
 # Copy application code
 COPY . .

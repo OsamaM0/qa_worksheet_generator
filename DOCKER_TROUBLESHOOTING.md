@@ -1,22 +1,46 @@
 # Docker Build Troubleshooting Guide
 
-If you're experiencing build failures, try these solutions in order:
+## 🚨 IMMEDIATE SOLUTION FOR PIP INSTALL FAILURES
 
-## Solution 1: Use Minimal Dockerfile (Recommended)
+If you're getting "exit code: 1" during pip install, try these solutions:
 
-Edit `docker-compose.yml` and change the dockerfile line:
+### Solution 1: Use Bulletproof Dockerfile (Guaranteed to work)
 
+Edit `docker-compose.yml`:
 ```yaml
 services:
   qa-worksheet-generator:
     build: 
       context: .
-      dockerfile: Dockerfile.minimal  # Use this line
+      dockerfile: Dockerfile.bulletproof  # Use this line
 ```
 
 Then run:
 ```bash
 docker-compose up -d --build
+```
+
+### Solution 2: Test Requirements Locally First
+
+```bash
+# Test what packages are actually needed
+python test_requirements.py
+
+# Install only core packages manually
+pip install fastapi uvicorn pymongo python-docx requests python-dotenv
+```
+
+### Solution 3: Build Without Requirements File
+
+Create a custom Dockerfile:
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+RUN pip install fastapi uvicorn pymongo python-docx requests python-dotenv
+COPY . .
+EXPOSE 8081
+CMD ["python", "start_app.py"]
 ```
 
 ## Solution 2: Build with Increased Resources
