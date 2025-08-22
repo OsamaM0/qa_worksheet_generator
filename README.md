@@ -35,15 +35,15 @@ python app.py
 ```
 
 4. **Access the API**:
-- API Documentation: http://localhost:8000/docs
-- Health Check: http://localhost:8000/docs
+- API Documentation: http://localhost:8081/docs
+- Health Check: http://localhost:8081/docs
 
 ### Docker Deployment
 
 1. **Build and run with Docker**:
 ```bash
 docker build -t worksheet-generator .
-docker run -p 8000:8000 --env-file .env worksheet-generator
+docker run -p 8081:8081 --env-file .env worksheet-generator
 ```
 
 2. **Or use Docker Compose**:
@@ -96,7 +96,7 @@ DB_NAME=your_database_name
 
 # Application Configuration
 HOST=0.0.0.0
-PORT=8000
+PORT=8081
 DEBUG=False
 
 # Optional
@@ -147,7 +147,7 @@ The application uses multiple fallback methods for DOCX to PDF conversion:
 ```bash
 docker run -d \
   --name worksheet-generator \
-  -p 8000:8000 \
+  -p 8081:8081 \
   -e MONGO_URI="your_mongo_uri" \
   -e DB_NAME="your_db_name" \
   -v $(pwd)/logo.png:/app/logo.png:ro \
@@ -160,7 +160,7 @@ services:
   worksheet-generator:
     build: .
     ports:
-      - "8000:8000"
+      - "8081:8081"
     environment:
       - MONGO_URI=your_mongo_uri
       - DB_NAME=your_db_name
@@ -187,7 +187,7 @@ pytest
 ```
 
 ### API Documentation
-Visit `http://localhost:8000/docs` for interactive API documentation.
+Visit `http://localhost:8081/docs` for interactive API documentation.
 
 ## Troubleshooting
 

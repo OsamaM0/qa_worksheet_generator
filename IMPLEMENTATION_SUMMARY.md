@@ -90,7 +90,7 @@ docker-compose up -d
 # Direct run with environment
 docker run -d \
   --name worksheet-api \
-  -p 8000:8000 \
+  -p 8081:8081 \
   -e MONGO_URI="mongodb://host:port/db" \
   -e ENABLE_PDF_GENERATION="true" \
   --read-only \
@@ -105,7 +105,7 @@ MONGO_URI=mongodb://ai:VgjVpcllJjhYy2c@65.109.31.94:27017/ien?authSource=ien
 MONGO_DB_NAME=ien
 ENABLE_PDF_GENERATION=true
 HOST=0.0.0.0
-PORT=8000
+PORT=8081
 ```
 
 ## 🔒 **Security Guarantees**

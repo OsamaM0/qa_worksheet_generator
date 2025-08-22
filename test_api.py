@@ -7,7 +7,7 @@ import requests
 import json
 import time
 
-def test_api_endpoint(base_url="http://localhost:8000"):
+def test_api_endpoint(base_url="http://localhost:8081"):
     """Test the worksheet generator API"""
     
     print("🧪 Testing Saudi Edu Worksheet Generator API")
@@ -83,7 +83,7 @@ def test_api_endpoint(base_url="http://localhost:8000"):
     print("\n" + "=" * 50)
     print("🏁 Test completed!")
 
-def test_health_check(base_url="http://localhost:8000"):
+def test_health_check(base_url="http://localhost:8081"):
     """Test if the API is accessible"""
     try:
         response = requests.get(f"{base_url}/docs", timeout=5)
@@ -107,4 +107,4 @@ if __name__ == "__main__":
         test_api_endpoint()
     else:
         print("❌ Cannot proceed with tests - API is not accessible")
-        print("💡 Make sure the application is running on http://localhost:8000")
+        print("💡 Make sure the application is running on http://localhost:8081")

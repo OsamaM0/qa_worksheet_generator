@@ -5,7 +5,7 @@ services:
   worksheet-generator:
     build: .
     ports:
-      - "8000:8000"
+      - "8081:8081"
     environment:
       # MongoDB Configuration (from .env file)
       - MONGO_URI=${MONGO_URI:-mongodb://ai:VgjVpcllJjhYy2c@65.109.31.94:27017/ien?authSource=ien}
@@ -13,7 +13,7 @@ services:
       
       # API Configuration
       - HOST=0.0.0.0
-      - PORT=8000
+      - PORT=8081
       - DEBUG=False
       
       # Feature Configuration
@@ -28,7 +28,7 @@ services:
       - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081/docs"]
       interval: 30s
       timeout: 10s
       retries: 3

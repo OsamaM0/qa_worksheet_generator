@@ -14,7 +14,7 @@ def main():
         application = getattr(app, 'app')
         
         host = os.getenv('HOST', '0.0.0.0')
-        port = int(os.getenv('PORT', '8000'))
+        port = int(os.getenv('PORT', '8081'))
         
         print(f"Starting worksheet API on {host}:{port}")
         uvicorn.run(application, host=host, port=port)

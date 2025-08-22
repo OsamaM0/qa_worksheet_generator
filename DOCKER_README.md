@@ -52,7 +52,7 @@ docker-compose down
 # Run with environment variables
 docker run -d \
   --name worksheet-api \
-  -p 8000:8000 \
+  -p 8081:8081 \
   -e MONGO_URI="your_mongo_connection" \
   -e MONGO_DB_NAME="ien" \
   -e ENABLE_PDF_GENERATION="true" \
@@ -74,7 +74,7 @@ MONGO_DB_NAME=ien
 # Optional Configuration
 ENABLE_PDF_GENERATION=true  # Enable/disable PDF conversion
 HOST=0.0.0.0               # API host
-PORT=8000                  # API port
+PORT=8081                  # API port
 ```
 
 ### Environment File (.env)
@@ -102,10 +102,10 @@ docker run --rm worksheet-api:secure whoami
 ### Test API
 ```bash
 # Health check
-curl http://localhost:8000/docs
+curl http://localhost:8081/docs
 
 # Test worksheet generation
-curl "http://localhost:8000/generate-worksheet/?lesson_id=600&output=worksheet&num_questions=3&enable_pdf=true"
+curl "http://localhost:8081/generate-worksheet/?lesson_id=600&output=worksheet&num_questions=3&enable_pdf=true"
 ```
 
 ## 📊 Image Comparison
@@ -124,7 +124,7 @@ curl "http://localhost:8000/generate-worksheet/?lesson_id=600&output=worksheet&n
 ```bash
 # Run with volume mount for development
 docker run -d \
-  -p 8000:8000 \
+  -p 8081:8081 \
   -v $(pwd):/app \
   -e MONGO_URI="mongodb://localhost:27017/ien" \
   python:3.10-slim \
