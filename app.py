@@ -864,8 +864,3 @@ def get_lesson_details(
             "error": str(e),
             "lesson_identifier": lesson_identifier
         }
-
-
-if __name__ == "__main__":
-    
-    uvicorn.run("app:app", host="0.0.0.0", port=8081, reload=True)

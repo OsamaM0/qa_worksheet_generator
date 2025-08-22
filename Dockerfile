@@ -86,4 +86,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 8081
 
 # Run the application using the minimal startup script
-CMD ["python", "/app/start_app.py"]
+CMD ["python", "start_app.py"]
