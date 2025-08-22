@@ -1,0 +1,71 @@
+# Docker Compose for Saudi Edu Worksheet Generator
+version: '3.8'
+
+services:
+  worksheet-generator:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # MongoDB Configuration (from .env file)
+      - MONGO_URI=${MONGO_URI:-mongodb://ai:VgjVpcllJjhYy2c@65.109.31.94:27017/ien?authSource=ien}
+      - MONGO_DB_NAME=${MONGO_DB_NAME:-ien}
+      
+      # API Configuration
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEBUG=False
+      
+      # Feature Configuration
+      - ENABLE_PDF_GENERATION=${ENABLE_PDF_GENERATION:-true}
+      
+    volumes:
+      # Mount logo file (read-only)
+      - ./logo.png:/app/logo.png:ro
+      # Mount temp directory for file operations
+      - worksheet_temp:/tmp/worksheet_temp
+      # Mount logs directory
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - worksheet-net
+    # Security constraints
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+
+networks:
+  worksheet-net:
+    driver: bridge
+
+volumes:
+  worksheet_temp:
+
+# Optional: Add MongoDB service for local development
+# Uncomment the following if you want to run MongoDB locally
+#
+#  mongodb:
+#    image: mongo:7.0
+#    ports:
+#      - "27017:27017"
+#    environment:
+#      - MONGO_INITDB_ROOT_USERNAME=admin
+#      - MONGO_INITDB_ROOT_PASSWORD=password
+#      - MONGO_INITDB_DATABASE=ien
+#    volumes:
+#      - mongodb_data:/data/db
+#    networks:
+#      - worksheet-net
+#    restart: unless-stopped
+#
+#volumes:
+#  mongodb_data:
