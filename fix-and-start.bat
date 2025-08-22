@@ -24,8 +24,8 @@ REM Clean up any problematic volumes
 echo 🧹 Cleaning up Docker...
 docker system prune -f 2>nul
 
-REM Start with bulletproof configuration
-echo 🚀 Starting with bulletproof configuration...
+REM Start with root configuration (avoids permission issues)
+echo 🚀 Starting with root configuration (no permission issues)...
 docker-compose up -d --build
 
 if %ERRORLEVEL% EQU 0 (

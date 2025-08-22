@@ -1,0 +1,47 @@
+# Super simple Dockerfile - Runs as root to avoid permission issues
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOST=0.0.0.0 \
+    PORT=8081
+
+# Set work directory
+WORKDIR /app
+
+# Install only curl for health checks
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip first
+RUN pip install --upgrade pip
+
+# Install packages one by one with error handling
+RUN pip install fastapi || echo "FastAPI failed"
+RUN pip install uvicorn || echo "Uvicorn failed"
+RUN pip install pymongo || echo "PyMongo failed"
+RUN pip install python-docx || echo "python-docx failed"
+RUN pip install requests || echo "Requests failed"
+RUN pip install python-dotenv || echo "python-dotenv failed"
+
+# Create logs directory
+RUN mkdir -p /app/logs
+
+# Copy application code
+COPY . .
+
+# Ensure logo.png exists
+RUN touch logo.png
+
+# Expose port
+EXPOSE 8081
+
+# Simple health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8081/docs || exit 1
+
+# Run as root to avoid permission issues
+CMD ["python", "start_app_simple.py"]

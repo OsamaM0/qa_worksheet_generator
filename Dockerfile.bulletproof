@@ -27,8 +27,11 @@ RUN pip install python-docx || (echo "python-docx failed but continuing" && exit
 RUN pip install requests || (echo "Requests failed but continuing" && exit 0)
 RUN pip install python-dotenv || (echo "python-dotenv failed but continuing" && exit 0)
 
-# Create logs directory
-RUN mkdir -p /app/logs
+# Create simple non-root user first
+RUN useradd -m -u 1000 appuser
+
+# Create logs directory and set proper ownership
+RUN mkdir -p /app/logs && chown -R appuser:appuser /app/logs
 
 # Copy application code
 COPY . .
@@ -41,8 +44,8 @@ RUN if [ ! -f logo.png ]; then \
         echo "Using existing logo.png"; \
     fi
 
-# Create simple non-root user
-RUN useradd -m appuser && chown -R appuser:appuser /app
+# Set ownership of all app files to appuser
+RUN chown -R appuser:appuser /app
 USER appuser
 
 # Expose port
@@ -52,5 +55,5 @@ EXPOSE 8081
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8081/docs || exit 1
 
-# Run the application
-CMD ["python", "start_app.py"]
+# Run the application (use simple version to avoid logging issues)
+CMD ["python", "start_app_simple.py"]

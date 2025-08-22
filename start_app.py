@@ -5,20 +5,38 @@ import sys
 import logging
 from pathlib import Path
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('/app/logs/app.log') if os.path.exists('/app/logs') else logging.NullHandler()
-    ]
-)
+# Configure logging with better error handling
+def setup_logging():
+    """Setup logging with fallback if file logging fails."""
+    handlers = [logging.StreamHandler(sys.stdout)]
+    
+    # Try to add file handler, but don't fail if it doesn't work
+    try:
+        logs_dir = '/app/logs'
+        if os.path.exists(logs_dir):
+            # Test if we can write to the logs directory
+            test_file = os.path.join(logs_dir, 'test.log')
+            try:
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.remove(test_file)
+                # If we got here, we can write to the directory
+                handlers.append(logging.FileHandler('/app/logs/app.log'))
+            except (PermissionError, OSError):
+                print("Warning: Cannot write to /app/logs - logging to console only")
+    except Exception as e:
+        print(f"Warning: Logging setup issue: {e} - logging to console only")
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=handlers
+    )
+
+# Setup logging
+setup_logging()
 
 logger = logging.getLogger(__name__)
-
-# Add the wheel package location to Python path
-sys.path.insert(0, '/opt/venv/lib/python3.10/site-packages')
 
 def main():
     try:
