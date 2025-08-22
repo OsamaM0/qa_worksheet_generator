@@ -19,8 +19,8 @@ services:
     volumes:
       # Mount logs for persistence
       - ./logs:/app/logs
-      # Mount logo if you have a local one
-      - ./logo.png:/app/logo.png
+      # Don't mount logo.png directly - let the container handle it
+      # The Dockerfile already copies or creates the logo.png file
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/docs"]

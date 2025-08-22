@@ -33,8 +33,13 @@ RUN mkdir -p /app/logs
 # Copy application code
 COPY . .
 
-# Create placeholder logo
-RUN touch logo.png
+# Ensure logo.png exists (use existing or create placeholder)
+RUN if [ ! -f logo.png ]; then \
+        echo "Creating placeholder logo.png"; \
+        touch logo.png; \
+    else \
+        echo "Using existing logo.png"; \
+    fi
 
 # Create simple non-root user
 RUN useradd -m appuser && chown -R appuser:appuser /app
