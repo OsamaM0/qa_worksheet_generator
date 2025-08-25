@@ -59,6 +59,9 @@ COPY requirements.txt ./
 # Install all packages from requirements.txt
 RUN pip install -r requirements.txt
 
+# Install additional PDF conversion libraries
+RUN pip install weasyprint reportlab pypdf2
+
 # ==============================================================================
 # STAGE 2: RUNTIME ENVIRONMENT
 # ==============================================================================
@@ -88,101 +91,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     ca-certificates \
-    gnupg2 \
-    debconf-utils \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install LibreOffice and PDF conversion tools step by step for better debugging
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    openjdk-11-jre-headless \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install LibreOffice core first
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    libreoffice-common \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install LibreOffice writer and core
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    libreoffice-core \
-    libreoffice-writer \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install main LibreOffice package
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    libreoffice \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install unoconv for document conversion
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    unoconv \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install fonts with proper Microsoft fonts configuration
-RUN apt-get update && \
-    # Pre-accept Microsoft fonts license to avoid interactive prompt
-    echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections && \
-    apt-get install -y --no-install-recommends \
-    # Basic fonts
+    procps \
+    netcat-openbsd \
+    file \
+    # Basic fonts for text rendering
     fonts-liberation \
     fonts-dejavu \
     fonts-dejavu-core \
-    fonts-dejavu-extra \
     fonts-noto \
-    fonts-noto-cjk \
-    fonts-noto-color-emoji \
-    fonts-noto-mono \
-    fonts-opensymbol \
-    # Microsoft fonts (with pre-accepted license)
-    ttf-mscorefonts-installer \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install system libraries for GUI applications in headless mode
-RUN apt-get update && apt-get install -y --no-install-recommends \
     libfontconfig1 \
-    libxrender1 \
-    libxext6 \
-    libxi6 \
-    libxrandr2 \
-    libxcursor1 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxtst6 \
-    libxss1 \
-    libasound2 \
-    # Process management
-    procps \
-    # Network tools
-    netcat-openbsd \
-    # File utilities
-    file \
-    # Cleanup
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    # Update font cache
     && fc-cache -fv
 
 # Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-
-# Test LibreOffice and unoconv installation
-RUN echo "Testing PDF conversion tools..." && \
-    libreoffice --version && \
-    unoconv --version && \
-    echo "✓ PDF conversion tools installed successfully"
 
 # Create application directories
 RUN mkdir -p /app/logs /app/temp /app/uploads /app/downloads
@@ -213,26 +137,22 @@ USER appuser
 # Expose port
 EXPOSE 8081
 
-# Comprehensive health check that tests multiple components
-HEALTHCHECK --interval=60s --timeout=45s --start-period=90s --retries=3 \
-    CMD curl -f http://localhost:8081/docs && \
-        curl -f http://localhost:8081/pdf-status/ || exit 1
+# Simple health check
+HEALTHCHECK --interval=60s --timeout=30s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8081/docs || exit 1
 
 # ==============================================================================
 # STARTUP CONFIGURATION
 # ==============================================================================
 
-# Create startup script that tests all functionality
+# Create startup script
 RUN echo '#!/bin/bash\n\
 echo "=== Saudi Edu Worksheet Generator Startup ==="\n\
 echo "Platform: $(uname -a)"\n\
 echo "Python: $(python --version)"\n\
 echo "Working directory: $(pwd)"\n\
 echo "User: $(whoami)"\n\
-echo ""\n\
-echo "Testing PDF conversion tools..."\n\
-libreoffice --version 2>/dev/null && echo "✓ LibreOffice available" || echo "✗ LibreOffice not available"\n\
-unoconv --version 2>/dev/null && echo "✓ unoconv available" || echo "✗ unoconv not available"\n\
+echo "PDF conversion: Python libraries (WeasyPrint, ReportLab)"\n\
 echo ""\n\
 echo "Starting application..."\n\
 exec python start_app.py\n\

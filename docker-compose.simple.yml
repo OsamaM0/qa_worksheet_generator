@@ -2,12 +2,8 @@ services:
   qa-worksheet-generator:
     build: 
       context: .
-      dockerfile: Dockerfile
-      args:
-        - BUILD_VERSION=latest
-        - BUILD_DATE=${BUILD_DATE:-2025-08-25}
-        - VCS_REF=${VCS_REF:-main}
-    container_name: qa_worksheet_generator
+      dockerfile: Dockerfile.simple
+    container_name: qa_worksheet_generator_simple
     ports:
       - "8081:8081"
     environment:
@@ -28,11 +24,10 @@ services:
       - S3_ACCOUNT_ID=${S3_ACCOUNT_ID}
       - S3_API_TOKEN=${S3_API_TOKEN}
       
-      # PDF conversion settings (using Python libraries)
+      # PDF conversion settings (using Python libraries only)
       - PDF_CONVERSION_TIMEOUT=60
       - PDF_CONVERSION_RETRIES=3
       - PDF_CONVERSION_METHOD=weasyprint
-      - PDF_CONVERSION_AVAILABLE=true
       
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -52,17 +47,17 @@ services:
       interval: 60s
       timeout: 30s
       retries: 3
-      start_period: 90s
+      start_period: 60s
       
-    # Resource limits optimized for PDF conversion
+    # Resource limits
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: '1.0'
-        reservations:
-          memory: 512M
+          memory: 1G
           cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
           
     networks:
       - qa-worksheet-network

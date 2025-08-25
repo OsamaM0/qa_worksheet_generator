@@ -1,0 +1,73 @@
+# ==============================================================================
+# SIMPLE DOCKER IMAGE FOR SAUDI EDU WORKSHEET GENERATOR
+# ==============================================================================
+# Ultra-minimal version that avoids problematic packages
+# ==============================================================================
+
+FROM python:3.11-slim
+
+# Environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    HOST=0.0.0.0 \
+    PORT=8081 \
+    PYTHONPATH="/app:$PYTHONPATH"
+
+# Set work directory
+WORKDIR /app
+
+# Update package lists and install only essential packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip and install Python packages
+RUN pip install --upgrade pip setuptools wheel
+
+# Copy requirements and install Python packages
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+
+# Install additional PDF packages via pip (avoiding system packages)
+RUN pip install weasyprint reportlab pypdf2 pdfkit
+
+# Create application directories
+RUN mkdir -p /app/logs /app/temp /app/uploads /app/downloads
+
+# Copy application code
+COPY . .
+
+# Ensure logo file exists
+RUN if [ ! -f logo.png ]; then \
+        echo "Warning: logo.png not found, creating placeholder"; \
+        touch logo.png; \
+    fi
+
+# Make scripts executable
+RUN chmod +x *.sh 2>/dev/null || true
+
+# Create non-root user
+RUN groupadd -r appuser && \
+    useradd -r -g appuser -u 1000 appuser && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Expose port
+EXPOSE 8081
+
+# Simple health check
+HEALTHCHECK --interval=60s --timeout=30s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8081/docs || exit 1
+
+# Start the application
+CMD ["python", "start_app.py"]
+
+# Labels
+LABEL maintainer="Saudi Edu Team" \
+      version="1.0.3" \
+      description="Simple Saudi Edu Worksheet Generator"
