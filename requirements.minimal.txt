@@ -1,7 +1,0 @@
-# Absolute minimal requirements - core only
-fastapi
-uvicorn
-pymongo
-python-docx
-requests
-python-dotenv

@@ -13,6 +13,7 @@ import os
 import tempfile
 import copy
 from dotenv import load_dotenv
+from s3_service import get_s3_service, upload_worksheet_files
 
 # Load environment variables
 load_dotenv()
@@ -281,31 +282,139 @@ class PDFConverter:
     
     def __init__(self, logo_path: str = None):
         self.logo_path = logo_path or "logo.png"
+        self._print_environment_info()
+    
+    def _print_environment_info(self):
+        """Print environment information for debugging"""
+        import platform
+        import os
+        print(f"=== PDF Converter Environment Info ===")
+        print(f"Platform: {platform.system()} {platform.release()}")
+        print(f"Python version: {platform.python_version()}")
+        print(f"Working directory: {os.getcwd()}")
+        
+        # Check for PDF conversion tools
+        tools_status = []
+        
+        # Check LibreOffice/soffice
+        try:
+            import subprocess
+            result = subprocess.run(['libreoffice', '--version'], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                tools_status.append("✓ LibreOffice available")
+            else:
+                tools_status.append("✗ LibreOffice not found")
+        except:
+            tools_status.append("✗ LibreOffice not found")
+        
+        # Check unoconv
+        try:
+            result = subprocess.run(['unoconv', '--version'], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                tools_status.append("✓ unoconv available")
+            else:
+                tools_status.append("✗ unoconv not found")
+        except:
+            tools_status.append("✗ unoconv not found")
+        
+        # Check docx2pdf
+        try:
+            import docx2pdf
+            tools_status.append("✓ docx2pdf library available")
+        except ImportError:
+            tools_status.append("✗ docx2pdf library not available")
+        
+        # Check comtypes (Windows)
+        if platform.system() == "Windows":
+            try:
+                import comtypes
+                tools_status.append("✓ comtypes available (Windows)")
+            except ImportError:
+                tools_status.append("✗ comtypes not available")
+        
+        for status in tools_status:
+            print(status)
+        print("==========================================")
     
     def convert_docx_to_pdf(self, docx_path: str, output_path: str) -> bool:
         """Convert DOCX file to PDF with logo watermark"""
         try:
             # Try different methods for DOCX to PDF conversion
+            # Order optimized for server environments
             methods = [
-                self._convert_with_python_docx2pdf,
-                self._convert_with_comtypes,
-                self._convert_with_libreoffice,
-                self._fallback_to_copy
+                self._convert_with_unoconv,           # Best for Linux servers
+                self._convert_with_libreoffice,       # Backup LibreOffice method
+                self._convert_with_python_docx2pdf,   # Windows/local dev
+                self._convert_with_comtypes,          # Windows only
+                self._fallback_to_copy                # Last resort
             ]
             
+            conversion_successful = False
             for method in methods:
                 try:
+                    print(f"Trying PDF conversion method: {method.__name__}")
                     if method(docx_path, output_path):
-                        # Add watermark if conversion was successful
-                        self._add_watermark_to_pdf(output_path)
-                        return True
+                        print(f"PDF conversion successful with: {method.__name__}")
+                        conversion_successful = True
+                        break
                 except Exception as e:
                     print(f"Method {method.__name__} failed: {e}")
                     continue
             
-            return False
+            if conversion_successful:
+                # Add watermark if conversion was successful
+                try:
+                    self._add_watermark_to_pdf(output_path)
+                    print("Watermark added successfully")
+                except Exception as e:
+                    print(f"Watermark failed, but PDF was created: {e}")
+                return True
+            else:
+                print("All PDF conversion methods failed")
+                return False
+                
         except Exception as e:
             print(f"PDF conversion error: {e}")
+            return False
+    
+    def _convert_with_unoconv(self, docx_path: str, output_path: str) -> bool:
+        """Try converting using unoconv (best for Linux servers)"""
+        try:
+            import subprocess
+            import os
+            
+            # Check if unoconv is available
+            try:
+                subprocess.run(['unoconv', '--version'], capture_output=True, check=True, timeout=10)
+            except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                print("unoconv not available")
+                return False
+            
+            # Get the output directory and filename
+            output_dir = os.path.dirname(output_path)
+            
+            # Convert using unoconv
+            cmd = [
+                'unoconv',
+                '-f', 'pdf',           # Format: PDF
+                '-o', output_path,     # Output file
+                docx_path              # Input file
+            ]
+            
+            print(f"Running unoconv command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            
+            if result.returncode == 0 and os.path.exists(output_path):
+                print("unoconv conversion successful")
+                return True
+            else:
+                print(f"unoconv failed with return code {result.returncode}")
+                if result.stderr:
+                    print(f"unoconv stderr: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            print(f"unoconv conversion failed: {e}")
             return False
     
     def _convert_with_python_docx2pdf(self, docx_path: str, output_path: str) -> bool:
@@ -346,53 +455,78 @@ class PDFConverter:
             return False
     
     def _convert_with_libreoffice(self, docx_path: str, output_path: str) -> bool:
-        """Try converting using LibreOffice command line"""
+        """Try converting using LibreOffice command line (improved version)"""
         try:
             import subprocess
+            import os
+            import time
             
-            # Try common LibreOffice paths
-            libreoffice_paths = [
-                "libreoffice",
-                "soffice",
-                "C:\\Program Files\\LibreOffice\\program\\soffice.exe",
-                "C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe"
+            # Try common LibreOffice paths and commands
+            libreoffice_commands = [
+                ['libreoffice', '--headless', '--convert-to', 'pdf'],
+                ['soffice', '--headless', '--convert-to', 'pdf'],
+                ['/usr/bin/libreoffice', '--headless', '--convert-to', 'pdf'],
+                ['/usr/bin/soffice', '--headless', '--convert-to', 'pdf'],
+                ['C:\\Program Files\\LibreOffice\\program\\soffice.exe', '--headless', '--convert-to', 'pdf'],
+                ['C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe', '--headless', '--convert-to', 'pdf']
             ]
             
-            for lo_path in libreoffice_paths:
+            output_dir = os.path.dirname(output_path)
+            
+            for base_cmd in libreoffice_commands:
                 try:
-                    output_dir = os.path.dirname(output_path)
-                    cmd = [
-                        lo_path,
-                        "--headless",
-                        "--convert-to", "pdf",
-                        "--outdir", output_dir,
-                        docx_path
-                    ]
+                    # Test if command exists
+                    test_cmd = [base_cmd[0], '--version']
+                    test_result = subprocess.run(test_cmd, capture_output=True, timeout=10)
+                    if test_result.returncode != 0:
+                        continue
                     
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                    # Build full command
+                    cmd = base_cmd + ['--outdir', output_dir, docx_path]
+                    
+                    print(f"Trying LibreOffice command: {' '.join(cmd)}")
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                    
                     if result.returncode == 0:
-                        # LibreOffice creates PDF with same name as DOCX
-                        generated_pdf = os.path.join(output_dir, os.path.splitext(os.path.basename(docx_path))[0] + ".pdf")
+                        # LibreOffice creates PDF with same base name as DOCX
+                        base_name = os.path.splitext(os.path.basename(docx_path))[0]
+                        generated_pdf = os.path.join(output_dir, f"{base_name}.pdf")
+                        
+                        # Wait a moment for file to be written
+                        time.sleep(1)
+                        
                         if os.path.exists(generated_pdf):
                             if generated_pdf != output_path:
+                                if os.path.exists(output_path):
+                                    os.remove(output_path)
                                 os.rename(generated_pdf, output_path)
+                            print("LibreOffice conversion successful")
                             return True
-                    break
-                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    else:
+                        print(f"LibreOffice failed with return code {result.returncode}")
+                        if result.stderr:
+                            print(f"LibreOffice stderr: {result.stderr}")
+                        
+                except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                    print(f"LibreOffice command failed: {e}")
                     continue
             
+            print("All LibreOffice commands failed")
             return False
+            
         except Exception as e:
             print(f"LibreOffice conversion failed: {e}")
             return False
     
     def _fallback_to_copy(self, docx_path: str, output_path: str) -> bool:
-        """Fallback: copy DOCX as 'PDF' (not a real conversion)"""
+        """Fallback: copy DOCX as 'PDF' (not a real conversion) - DO NOT USE for production"""
         try:
             import shutil
-            shutil.copy2(docx_path, output_path.replace('.pdf', '_as_docx.docx'))
-            print(f"Could not convert to PDF, copied DOCX file instead")
-            return False  # Return False since it's not a real PDF
+            # Create a .docx copy instead of pretending it's a PDF
+            docx_copy_path = output_path.replace('.pdf', '_fallback.docx')
+            shutil.copy2(docx_path, docx_copy_path)
+            print(f"FALLBACK: Could not convert to PDF, copied DOCX file to {docx_copy_path}")
+            return False  # Return False since it's not a real PDF conversion
         except Exception as e:
             print(f"Fallback copy failed: {e}")
             return False
@@ -639,8 +773,12 @@ def generate_worksheet(
             "lesson_title": lesson_title,
             "base_filename": base_filename,
             "generate_pdf": generate_pdf,
-            "files": {}
+            "files": {},
+            "s3_uploads": {}
         }
+
+        # Store local file paths for S3 upload
+        local_files = {}
 
         # Generate JSON files
         try:
@@ -648,11 +786,13 @@ def generate_worksheet(
             with open(json_no_solutions, "w", encoding="utf-8") as f:
                 f.write(json_util.dumps(data_no_solutions, ensure_ascii=False, indent=2))
             result["files"]["json_no_solutions"] = json_no_solutions
+            local_files["json_no_solutions"] = json_no_solutions
 
             json_with_solutions = os.path.join(tempfile.gettempdir(), f"{base_filename}_with_solutions.json")
             with open(json_with_solutions, "w", encoding="utf-8") as f:
                 f.write(json_util.dumps(data_with_solutions, ensure_ascii=False, indent=2))
             result["files"]["json_with_solutions"] = json_with_solutions
+            local_files["json_with_solutions"] = json_with_solutions
         except Exception as e:
             result["files"]["json_error"] = str(e)
 
@@ -664,6 +804,7 @@ def generate_worksheet(
             docx_result_no_sol = service.create_worksheet(data_no_solutions, docx_no_solutions)
             if docx_result_no_sol["status"] == "success":
                 result["files"]["docx_no_solutions"] = docx_no_solutions
+                local_files["docx_no_solutions"] = docx_no_solutions
             else:
                 result["files"]["docx_no_solutions_error"] = docx_result_no_sol["message"]
 
@@ -671,6 +812,7 @@ def generate_worksheet(
             docx_result_with_sol = service.create_worksheet(data_with_solutions, docx_with_solutions)
             if docx_result_with_sol["status"] == "success":
                 result["files"]["docx_with_solutions"] = docx_with_solutions
+                local_files["docx_with_solutions"] = docx_with_solutions
             else:
                 result["files"]["docx_with_solutions_error"] = docx_result_with_sol["message"]
                 
@@ -686,20 +828,48 @@ def generate_worksheet(
                     pdf_no_solutions = os.path.join(tempfile.gettempdir(), f"{base_filename}_no_solutions.pdf")
                     if pdf_converter.convert_docx_to_pdf(result["files"]["docx_no_solutions"], pdf_no_solutions):
                         result["files"]["pdf_no_solutions"] = pdf_no_solutions
+                        local_files["pdf_no_solutions"] = pdf_no_solutions
                     else:
-                        result["files"]["pdf_no_solutions_error"] = "DOCX to PDF conversion failed"
+                        result["files"]["pdf_no_solutions_error"] = "DOCX to PDF conversion failed - check server PDF conversion tools (LibreOffice/unoconv)"
 
                 if "docx_with_solutions" in result["files"]:
                     pdf_with_solutions = os.path.join(tempfile.gettempdir(), f"{base_filename}_with_solutions.pdf")
                     if pdf_converter.convert_docx_to_pdf(result["files"]["docx_with_solutions"], pdf_with_solutions):
                         result["files"]["pdf_with_solutions"] = pdf_with_solutions
+                        local_files["pdf_with_solutions"] = pdf_with_solutions
                     else:
-                        result["files"]["pdf_with_solutions_error"] = "DOCX to PDF conversion failed"
+                        result["files"]["pdf_with_solutions_error"] = "DOCX to PDF conversion failed - check server PDF conversion tools (LibreOffice/unoconv)"
                     
             except Exception as e:
-                result["files"]["pdf_error"] = str(e)
+                result["files"]["pdf_error"] = f"PDF conversion system error: {str(e)}. Check server configuration and PDF tools installation."
         else:
             result["files"]["pdf_skipped"] = "PDF generation disabled by user"
+
+        # Upload files to S3
+        if local_files:
+            try:
+                s3_upload_result = upload_worksheet_files(local_files, lesson_title)
+                result["s3_uploads"] = s3_upload_result
+                
+                # Clean up local temporary files after successful upload
+                if s3_upload_result.get("status") in ["success", "partial"]:
+                    for file_path in local_files.values():
+                        try:
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                        except Exception as cleanup_error:
+                            print(f"Warning: Could not clean up temporary file {file_path}: {cleanup_error}")
+                
+                # Update result with S3 URLs instead of local paths
+                if "files" in s3_upload_result:
+                    result["files"] = {}  # Clear local paths
+                    for file_type, upload_info in s3_upload_result["files"].items():
+                        result["files"][file_type] = upload_info["public_url"]
+                        
+            except Exception as e:
+                result["s3_uploads"] = {"status": "error", "message": f"S3 upload failed: {str(e)}"}
+                # Keep local files info if S3 upload fails
+                print(f"S3 upload failed, keeping local files: {e}")
 
         return result
 
@@ -708,6 +878,144 @@ def generate_worksheet(
             "error": str(e),
             "lesson_id": lesson_id,
             "output": output
+        }
+
+
+@app.get("/pdf-status/")
+def check_pdf_conversion_status():
+    """
+    Check the availability of PDF conversion tools on the server.
+    Useful for debugging PDF conversion issues.
+    """
+    try:
+        import subprocess
+        import platform
+        
+        status = {
+            "platform": f"{platform.system()} {platform.release()}",
+            "python_version": platform.python_version(),
+            "pdf_conversion_tools": {},
+            "recommendations": []
+        }
+        
+        # Check LibreOffice
+        try:
+            result = subprocess.run(['libreoffice', '--version'], 
+                                  capture_output=True, timeout=10)
+            if result.returncode == 0:
+                version = result.stdout.decode().strip().split('\n')[0]
+                status["pdf_conversion_tools"]["libreoffice"] = {
+                    "available": True,
+                    "version": version
+                }
+            else:
+                status["pdf_conversion_tools"]["libreoffice"] = {
+                    "available": False,
+                    "error": "Command failed"
+                }
+        except Exception as e:
+            status["pdf_conversion_tools"]["libreoffice"] = {
+                "available": False,
+                "error": str(e)
+            }
+        
+        # Check unoconv
+        try:
+            result = subprocess.run(['unoconv', '--version'], 
+                                  capture_output=True, timeout=10)
+            if result.returncode == 0:
+                version = result.stdout.decode().strip().split('\n')[0]
+                status["pdf_conversion_tools"]["unoconv"] = {
+                    "available": True,
+                    "version": version
+                }
+            else:
+                status["pdf_conversion_tools"]["unoconv"] = {
+                    "available": False,
+                    "error": "Command failed"
+                }
+        except Exception as e:
+            status["pdf_conversion_tools"]["unoconv"] = {
+                "available": False,
+                "error": str(e)
+            }
+        
+        # Check docx2pdf
+        try:
+            import docx2pdf
+            status["pdf_conversion_tools"]["docx2pdf"] = {
+                "available": True,
+                "note": "Python library available (requires Windows/Office)"
+            }
+        except ImportError:
+            status["pdf_conversion_tools"]["docx2pdf"] = {
+                "available": False,
+                "error": "Python library not installed"
+            }
+        
+        # Check comtypes (Windows only)
+        if platform.system() == "Windows":
+            try:
+                import comtypes
+                status["pdf_conversion_tools"]["comtypes"] = {
+                    "available": True,
+                    "note": "Windows COM library available"
+                }
+            except ImportError:
+                status["pdf_conversion_tools"]["comtypes"] = {
+                    "available": False,
+                    "error": "Python library not installed"
+                }
+        
+        # Generate recommendations
+        has_working_tool = any(
+            tool.get("available", False) 
+            for tool in status["pdf_conversion_tools"].values()
+        )
+        
+        if not has_working_tool:
+            status["recommendations"].extend([
+                "Install LibreOffice: apt-get install libreoffice libreoffice-writer",
+                "Install unoconv: apt-get install unoconv",
+                "Install additional fonts: apt-get install fonts-noto fonts-liberation"
+            ])
+        
+        status["pdf_conversion_available"] = has_working_tool
+        
+        return status
+        
+    except Exception as e:
+        return {
+            "error": f"Failed to check PDF conversion status: {str(e)}",
+            "pdf_conversion_available": False
+        }
+
+
+@app.get("/s3-status/")
+def check_s3_status():
+    """
+    Check the availability and health of S3/R2 storage service.
+    Useful for debugging S3 upload issues.
+    """
+    try:
+        s3_service = get_s3_service()
+        health_status = s3_service.health_check()
+        
+        # Add configuration info (without sensitive data)
+        health_status["configuration"] = {
+            "endpoint": s3_service.endpoint_url,
+            "bucket": s3_service.bucket_name,
+            "has_credentials": bool(s3_service.access_key_id and s3_service.secret_access_key)
+        }
+        
+        return health_status
+        
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": "service_initialization_failed",
+            "message": str(e),
+            "s3_available": False
         }
 
 
@@ -863,4 +1171,77 @@ def get_lesson_details(
         return {
             "error": str(e),
             "lesson_identifier": lesson_identifier
+        }
+
+
+@app.get("/download/{file_key:path}")
+def download_file_from_s3(file_key: str):
+    """
+    Download a file from S3/R2 storage.
+    
+    Args:
+        file_key: The S3 object key (path) of the file to download
+    
+    Returns:
+        Redirect to the public URL or file content
+    """
+    try:
+        s3_service = get_s3_service()
+        
+        # Get file info to check if it exists
+        file_info = s3_service.get_file_info(file_key)
+        
+        if file_info["status"] == "error":
+            return JSONResponse(
+                status_code=404,
+                content={"error": "File not found", "file_key": file_key}
+            )
+        
+        # Get public URL
+        public_url = s3_service.get_public_url(file_key)
+        
+        # Return redirect to public URL
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=public_url)
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "file_key": file_key}
+        )
+
+
+@app.get("/list-files/")
+def list_uploaded_files(
+    prefix: str = Query("", description="Filter files by prefix"),
+    limit: int = Query(50, description="Maximum number of files to return")
+):
+    """
+    List files uploaded to S3/R2 storage.
+    
+    Args:
+        prefix: Filter files by prefix (e.g., 'worksheets/')
+        limit: Maximum number of files to return
+    
+    Returns:
+        List of uploaded files with metadata
+    """
+    try:
+        s3_service = get_s3_service()
+        
+        # List files
+        files_result = s3_service.list_files(prefix=prefix, max_keys=limit)
+        
+        if files_result["status"] == "success":
+            # Add public URLs to file info
+            for file_info in files_result["files"]:
+                file_info["public_url"] = s3_service.get_public_url(file_info["key"])
+                file_info["download_url"] = f"/download/{file_info['key']}"
+        
+        return files_result
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
         }

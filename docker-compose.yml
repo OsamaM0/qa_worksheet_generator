@@ -1,55 +1,73 @@
-version: '3.8'
-
 services:
   qa-worksheet-generator:
     build: 
       context: .
-      dockerfile: Dockerfile.root
-      # Alternative dockerfiles if build fails:
-      # dockerfile: Dockerfile.bulletproof
-      # dockerfile: Dockerfile.minimal
+      dockerfile: Dockerfile
+      args:
+        - BUILD_VERSION=latest
+        - BUILD_DATE=${BUILD_DATE:-2025-08-25}
+        - VCS_REF=${VCS_REF:-main}
     container_name: qa_worksheet_generator
     ports:
       - "8081:8081"
     environment:
+      # Application settings
       - HOST=0.0.0.0
       - PORT=8081
+      - DEBUG=${DEBUG:-false}
+      
+      # Database configuration
       - MONGO_URI=${MONGO_URI:-mongodb://ai:VgjVpcllJjhYy2c@65.109.31.94:27017/ien?authSource=ien}
       - DB_NAME=${DB_NAME:-ien}
+      
+      # S3/Cloudflare R2 configuration
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - S3_ACCOUNT_ID=${S3_ACCOUNT_ID}
+      - S3_API_TOKEN=${S3_API_TOKEN}
+      
+      # PDF conversion settings for Linux
+      - SAL_USE_VCLPLUGIN=svp
+      - LIBREOFFICE_HEADLESS=1
+      - PDF_CONVERSION_TIMEOUT=60
+      - PDF_CONVERSION_RETRIES=3
+      - PDF_CONVERSION_AVAILABLE=true
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      
     volumes:
       # Mount logs for persistence
       - ./logs:/app/logs
-      # Don't mount logo.png directly - let the container handle it
-      # The Dockerfile already copies or creates the logo.png file
+      # Mount temp directory for file processing
+      - ./temp:/app/temp
+      # Optional: Mount custom logo if needed
+      - ./logo.png:/app/logo.png:ro
+      
     restart: unless-stopped
+    
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/docs"]
-      interval: 30s
-      timeout: 10s
+      interval: 60s
+      timeout: 30s
       retries: 3
-      start_period: 40s
+      start_period: 90s
+      
+    # Resource limits optimized for PDF conversion
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+          
     networks:
       - qa-worksheet-network
-
-  # Optional: MongoDB container for local development
-  # Uncomment if you want to run MongoDB locally instead of using the remote one
-  # mongodb:
-  #   image: mongo:7.0
-  #   container_name: qa_mongodb
-  #   ports:
-  #     - "27017:27017"
-  #   environment:
-  #     - MONGO_INITDB_ROOT_USERNAME=admin
-  #     - MONGO_INITDB_ROOT_PASSWORD=password
-  #     - MONGO_INITDB_DATABASE=ien
-  #   volumes:
-  #     - mongodb_data:/data/db
-  #   networks:
-  #     - qa-worksheet-network
 
 networks:
   qa-worksheet-network:
     driver: bridge
-
-# volumes:
-#   mongodb_data:

@@ -3,7 +3,6 @@ import uvicorn
 import os
 import sys
 import logging
-from pathlib import Path
 
 # Configure logging with better error handling
 def setup_logging():
