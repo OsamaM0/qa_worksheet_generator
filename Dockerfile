@@ -85,24 +85,33 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set work directory
 WORKDIR /app
 
-# Install runtime system dependencies
+# Install essential tools only
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Essential tools
     curl \
     wget \
     ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install additional utilities
+RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
-    netcat-openbsd \
     file \
-    # Basic fonts for text rendering
-    fonts-liberation \
-    fonts-dejavu \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install network tools (try without netcat-openbsd if it causes issues)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    netcat-traditional \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install basic fonts
+RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
-    fonts-noto \
     libfontconfig1 \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && fc-cache -fv
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv

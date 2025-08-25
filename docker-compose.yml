@@ -1,16 +1,22 @@
 services:
   qa-worksheet-generator:
-    build: 
-      context: .
-      dockerfile: Dockerfile
-      args:
-        - BUILD_VERSION=latest
-        - BUILD_DATE=${BUILD_DATE:-2025-08-25}
-        - VCS_REF=${VCS_REF:-main}
+    image: python:3.11-slim
     container_name: qa_worksheet_generator
+    working_dir: /app
+    command: >
+      bash -c "
+      apt-get update && 
+      apt-get install -y --no-install-recommends curl wget && 
+      pip install --upgrade pip && 
+      pip install -r requirements.txt && 
+      pip install weasyprint reportlab pypdf2 && 
+      python start_app.py
+      "
     ports:
       - "8081:8081"
     environment:
+      # Docker environment
+      - DEBIAN_FRONTEND=noninteractive
       # Application settings
       - HOST=0.0.0.0
       - PORT=8081
@@ -38,12 +44,12 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       
     volumes:
+      # Mount the entire project directory
+      - .:/app
       # Mount logs for persistence
       - ./logs:/app/logs
       # Mount temp directory for file processing
       - ./temp:/app/temp
-      # Optional: Mount custom logo if needed
-      - ./logo.png:/app/logo.png:ro
       
     restart: unless-stopped
     
