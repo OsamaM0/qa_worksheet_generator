@@ -93,12 +93,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install LibreOffice and PDF conversion tools in separate step
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libreoffice \
-    libreoffice-writer \
+# Install LibreOffice and PDF conversion tools step by step for better debugging
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    openjdk-11-jre-headless \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install LibreOffice core first
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     libreoffice-common \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install LibreOffice writer and core
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     libreoffice-core \
+    libreoffice-writer \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install main LibreOffice package
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libreoffice \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install unoconv for document conversion
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     unoconv \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
