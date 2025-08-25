@@ -1,18 +1,9 @@
 # ==============================================================================
-# OPTIMIZED DOCKER IMAGE FOR SAUDI EDU WORKSHEET GENERATOR
+# OPTIMIZED DOCKER IMAGE FOR SAUDI EDU WORKSHEET GENERATOR (NO MSFONTS)
 # ==============================================================================
 # Production-ready Docker image with S3 integration, PDF conversion,
 # Arabic text processing, and comprehensive functionality for Linux deployment.
-# 
-# Features included:
-# - Full PDF conversion support (LibreOffice + unoconv)
-# - Arabic font support
-# - S3/Cloudflare R2 integration
-# - MongoDB connectivity
-# - Complete Python dependencies
-# - Security (non-root user)
-# - Health checks and monitoring
-# - Multi-stage build for optimization
+# This version excludes Microsoft fonts to avoid installation issues.
 # ==============================================================================
 
 # ==============================================================================
@@ -82,9 +73,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set work directory
 WORKDIR /app
 
-# Install runtime system dependencies
+# Install essential tools first
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Essential tools
     curl \
     wget \
     ca-certificates \
@@ -93,7 +83,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install LibreOffice and PDF conversion tools in separate step
+# Install LibreOffice and PDF conversion tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     libreoffice-writer \
@@ -103,11 +93,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install fonts with proper Microsoft fonts configuration
-RUN apt-get update && \
-    # Pre-accept Microsoft fonts license to avoid interactive prompt
-    echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections && \
-    apt-get install -y --no-install-recommends \
+# Install fonts (excluding Microsoft fonts to avoid installation issues)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     # Basic fonts
     fonts-liberation \
     fonts-dejavu \
@@ -118,8 +105,9 @@ RUN apt-get update && \
     fonts-noto-color-emoji \
     fonts-noto-mono \
     fonts-opensymbol \
-    # Microsoft fonts (with pre-accepted license)
-    ttf-mscorefonts-installer \
+    # Additional open-source fonts for better compatibility
+    fonts-ubuntu \
+    fonts-roboto \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -219,10 +207,10 @@ CMD ["/app/start.sh"]
 # LABELS AND METADATA
 # ==============================================================================
 LABEL maintainer="Saudi Edu Team" \
-      version="1.0.0" \
-      description="Unified Saudi Edu Worksheet Generator with full PDF support" \
+      version="1.0.1" \
+      description="Unified Saudi Edu Worksheet Generator with full PDF support (no MS fonts)" \
       features="pdf-conversion,arabic-support,mongodb,fastapi" \
-      build-date="2025-08-23"
+      build-date="2025-08-25"
 
 # ==============================================================================
 # BUILD ARGUMENTS (for customization)
