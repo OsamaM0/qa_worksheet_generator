@@ -7,9 +7,14 @@ services:
       bash -c "
       apt-get update && 
       apt-get install -y --no-install-recommends curl wget && 
-      pip install --upgrade pip && 
-      pip install -r requirements.txt && 
-      pip install weasyprint reportlab pypdf2 && 
+      pip install --upgrade pip --root-user-action=ignore && 
+      if [ -f requirements.txt ]; then 
+        pip install -r requirements.txt --root-user-action=ignore; 
+      else 
+        echo 'requirements.txt not found, installing basic packages...'; 
+        pip install fastapi uvicorn pymongo boto3 motor python-multipart --root-user-action=ignore; 
+      fi &&
+      pip install weasyprint reportlab pypdf2 --root-user-action=ignore && 
       python start_app.py
       "
     ports:
@@ -51,7 +56,7 @@ services:
       # Mount temp directory for file processing
       - ./temp:/app/temp
       
-    restart: unless-stopped
+    restart: "no"
     
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/docs"]
