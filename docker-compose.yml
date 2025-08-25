@@ -1,25 +1,9 @@
 services:
   qa-worksheet-generator:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.working
     container_name: qa_worksheet_generator
-    working_dir: /app
-    command: >
-      bash -c "
-      echo 'Container started. Checking mounted files...' &&
-      pwd &&
-      ls -la /app &&
-      echo 'Python files:' &&
-      find /app -name '*.py' -type f &&
-      echo 'Requirements file:' &&
-      cat /app/requirements.txt | head -10 &&
-      apt-get update && 
-      apt-get install -y --no-install-recommends curl wget && 
-      pip install --upgrade pip --root-user-action=ignore && 
-      pip install -r /app/requirements.txt --root-user-action=ignore &&
-      pip install weasyprint reportlab pypdf2 beautifulsoup4 --root-user-action=ignore && 
-      echo 'Starting application...' &&
-      python -m uvicorn app:app --host 0.0.0.0 --port 8081 --reload
-      "
     ports:
       - "8081:8081"
     environment:
@@ -52,10 +36,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       
     volumes:
-      # Mount the entire project directory (using absolute path for Windows)
-      - type: bind
-        source: .
-        target: /app
       # Mount logs for persistence
       - ./logs:/app/logs
       # Mount temp directory for file processing
