@@ -5,21 +5,18 @@ services:
     working_dir: /app
     command: >
       bash -c "
+      echo 'Container started. Checking mounted files...' &&
+      pwd &&
+      ls -la /app &&
+      echo 'Python files:' &&
+      find /app -name '*.py' -type f &&
+      echo 'Requirements file:' &&
+      cat /app/requirements.txt | head -10 &&
       apt-get update && 
       apt-get install -y --no-install-recommends curl wget && 
       pip install --upgrade pip --root-user-action=ignore && 
-      if [ -f requirements.txt ]; then 
-        pip install -r requirements.txt --root-user-action=ignore; 
-      else 
-        echo 'requirements.txt not found, installing basic packages...'; 
-        pip install fastapi uvicorn pymongo boto3 motor python-multipart --root-user-action=ignore; 
-      fi &&
-      pip install weasyprint reportlab pypdf2 beautifulsoup4 python-docx arabic-reshaper python-bidi --root-user-action=ignore && 
-      ls -la /app &&
-      echo 'Files in /app:' && ls -la /app/*.py &&
-      echo 'Testing Python import...' &&
-      python -c 'import sys; print(\"Python path:\", sys.path)' &&
-      python -c 'import app; print(\"App imported successfully\")' &&
+      pip install -r /app/requirements.txt --root-user-action=ignore &&
+      pip install weasyprint reportlab pypdf2 beautifulsoup4 --root-user-action=ignore && 
       echo 'Starting application...' &&
       python -m uvicorn app:app --host 0.0.0.0 --port 8081 --reload
       "
@@ -55,8 +52,10 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       
     volumes:
-      # Mount the entire project directory
-      - .:/app
+      # Mount the entire project directory (using absolute path for Windows)
+      - type: bind
+        source: .
+        target: /app
       # Mount logs for persistence
       - ./logs:/app/logs
       # Mount temp directory for file processing
