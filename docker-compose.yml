@@ -14,10 +14,14 @@ services:
         echo 'requirements.txt not found, installing basic packages...'; 
         pip install fastapi uvicorn pymongo boto3 motor python-multipart --root-user-action=ignore; 
       fi &&
-      pip install weasyprint reportlab pypdf2 --root-user-action=ignore && 
+      pip install weasyprint reportlab pypdf2 beautifulsoup4 python-docx arabic-reshaper python-bidi --root-user-action=ignore && 
       ls -la /app &&
+      echo 'Files in /app:' && ls -la /app/*.py &&
+      echo 'Testing Python import...' &&
+      python -c 'import sys; print(\"Python path:\", sys.path)' &&
+      python -c 'import app; print(\"App imported successfully\")' &&
       echo 'Starting application...' &&
-      python -m uvicorn app:app --host 0.0.0.0 --port 8081
+      python -m uvicorn app:app --host 0.0.0.0 --port 8081 --reload
       "
     ports:
       - "8081:8081"
