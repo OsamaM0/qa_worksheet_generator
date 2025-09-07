@@ -848,7 +848,7 @@ class SidebarRenderer(ContentRenderer):
             
         self._render_section(container, sidebar_labels.before_lesson_title, sidebar.before_lesson)
         self._render_goals(container, sidebar.goals, sidebar_labels)
-        self._render_applications(container, sidebar_labels.applications_title)
+        self._render_applications(container, sidebar.applications, sidebar_labels)
         self._render_levels(container, sidebar.levels, sidebar_labels)
         self._render_notes(container, sidebar_labels.notes_title)
     
@@ -918,9 +918,27 @@ class SidebarRenderer(ContentRenderer):
             self.styler.set_cell_background(cell, self.styler.colors.light_gray)
             self.styler.set_cell_border(cell, self.styler.colors.border_gray)
             
-    def _render_applications(self, container, title: str) -> None:
+    def _render_applications(self, container, applications: List[str], sidebar_labels: SidebarLabels) -> None:
         """Render applications section"""
-        self._render_section(container, title)
+        self._render_section(container, sidebar_labels.applications_title)
+        
+        for application in applications:
+            table = container.add_table(rows=1, cols=1)
+            table.autofit = True
+            table.width = Inches(self.styler.ui.dimensions.sidebar_box_width_in)
+            
+            cell = table.cell(0, 0)
+            para = cell.paragraphs[0]
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            run = para.add_run(sidebar_labels.goals_bullet + self.formatter.format(application))
+            run.font.size = Pt(self.styler.ui.fonts.choice_text_pt - 1)
+            run.font.color.rgb = self.styler.colors.text_blue
+            
+            # Apply RTL while preserving CENTER alignment
+            self.formatter.apply_rtl_to_paragraph(para, preserve_alignment=True)
+            
+            self.styler.set_cell_background(cell, self.styler.colors.light_gray)
     
     def _render_levels(self, container, levels: List[str], sidebar_labels: SidebarLabels) -> None:
         """Render performance levels"""
