@@ -19,8 +19,8 @@ from s3_service import get_s3_service, upload_worksheet_files
 load_dotenv()
 
 # MongoDB configuration from environment
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://ai:VgjVpcllJjhYy2c@65.109.31.94:27017/ien?authSource=ien")
-DB_NAME = os.getenv("DB_NAME", "ien")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://ai:VgjVpcllJjhYy2c@65.109.31.94:27017/ien?authSource=admin&serverSelectionTimeoutMS=30000&connectTimeoutMS=30000")
+DB_NAME = os.getenv("DB_NAME", "ai")
 
 # optional: try to use BeautifulSoup for robust HTML stripping; fallback to regex
 try:
@@ -272,6 +272,231 @@ def create_worksheet_from_lesson(lesson_id: Union[int, str, ObjectId],
         final_copy = _oid_to_serializable(final)
     else:
         final_copy = final
+
+    client.close()
+    return final_copy
+
+
+def create_worksheet_from_ai_db(document_uuid: str,
+                               mongo_uri: str = "mongodb://localhost:27017",
+                               db_name: str = "ai",
+                               html_parsing: bool = True,
+                               output: str = "worksheet",   # "worksheet" or "question_bank"
+                               include_raw_meta: bool = False
+                               ) -> Dict[str, Any]:
+    """
+    Build worksheet or question_bank JSON from AI database structure.
+    
+    Parameters:
+      - document_uuid: The document UUID to find in both questions and worksheets collections
+      - html_parsing: True -> keep HTML/markup (but unescape entities).
+                      False -> strip all HTML tags and return plain text.
+      - output: "worksheet" -> include sidebar/header_config
+                "question_bank" -> return minimal structure with questions only
+      - include_raw_meta: If True, return the raw data in 'meta' (may contain ObjectId).
+                         If False, meta will be pre-serialized (ObjectId -> str).
+    """
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
+
+    # Find questions document by document_uuid
+    questions_doc = db.questions.find_one({"document_uuid": document_uuid})
+    if not questions_doc:
+        client.close()
+        raise ValueError(f"Questions document with UUID={document_uuid} not found")
+
+    # Find worksheet document by document_uuid
+    worksheet_doc = db.worksheets.find_one({"document_uuid": document_uuid})
+    if not worksheet_doc:
+        client.close()
+        raise ValueError(f"Worksheet document with UUID={document_uuid} not found")
+
+    # Extract questions from the new format
+    questions_data = questions_doc.get("questions", {})
+    multiple_choice_qs = []
+    true_false_qs = []
+    short_answer_qs = []
+    complete_qs = []
+
+    # Process multiple choice questions
+    for q in questions_data.get("multiple_choice", []):
+        processed_q = {
+            "question": _strip_html(q.get("question", ""), html_parsing),
+            "choices": [_strip_html(choice, html_parsing) for choice in q.get("choices", [])],
+            "answer_key": q.get("answer_key"),
+            "type": "multiple_choice"
+        }
+        multiple_choice_qs.append(processed_q)
+
+    # Process true/false questions
+    for q in questions_data.get("true_false", []):
+        processed_q = {
+            "question": _strip_html(q.get("question", ""), html_parsing),
+            "choices": ["صحيح", "خطأ"],  # Standard True/False choices in Arabic
+            "answer_key": q.get("answer_key"),
+            "type": "true_false"
+        }
+        true_false_qs.append(processed_q)
+
+    # Process short answer questions
+    for q in questions_data.get("short_answer", []):
+        processed_q = {
+            "question": _strip_html(q.get("question", ""), html_parsing),
+            "answer": _strip_html(q.get("answer", ""), html_parsing),
+            "type": "short_answer"
+        }
+        short_answer_qs.append(processed_q)
+
+    # Process complete questions (fill in the blank)
+    for q in questions_data.get("complete", []):
+        processed_q = {
+            "question": _strip_html(q.get("question", ""), html_parsing),
+            "answer": _strip_html(q.get("answer", ""), html_parsing),
+            "type": "complete"
+        }
+        complete_qs.append(processed_q)
+
+    # Extract worksheet data
+    worksheet_data = worksheet_doc.get("worksheet", {})
+    goals = worksheet_data.get("goals", [])
+    applications = worksheet_data.get("applications", [])
+    vocabulary = worksheet_data.get("vocabulary", [])
+    teacher_guidelines = worksheet_data.get("teacher_guidelines", [])
+
+    # Get filename for title
+    filename = worksheet_doc.get("filename", "")
+    
+    # Combine all questions for the questions section
+    all_multiple_choice = multiple_choice_qs + true_false_qs
+    all_essay = short_answer_qs + complete_qs
+
+    # Build the worksheet JSON structure
+    worksheet_json = {
+        "title": _strip_html(filename, html_parsing),
+        "multiple_choice": {
+            "header": _strip_html(": اختر الإجابة الصحيحة", html_parsing),
+            "questions": all_multiple_choice
+        },
+        "essay": {
+            "header": _strip_html(": أجب عن الأسئلة التالية", html_parsing),
+            "questions": all_essay
+        },
+        "header_config": {
+            "subject_memo": "",  # Can be extracted from metadata if available
+            "worksheet_number": _strip_html("ورقة عمل 1", html_parsing),
+            "name_label": _strip_html(" :الاسم", html_parsing),
+            "class_label": _strip_html(" :الصف", html_parsing),
+            "semester": "",  # Can be extracted from metadata if available
+            "grade": ""  # Can be extracted from metadata if available
+        },
+        "meta": {
+            "questions_doc": questions_doc,
+            "worksheet_doc": worksheet_doc,
+            "total_questions": len(all_multiple_choice) + len(all_essay),
+            "goals": goals,
+            "applications": applications,
+            "vocabulary": vocabulary,
+            "teacher_guidelines": teacher_guidelines
+        }
+    }
+
+    if output == "worksheet":
+        worksheet_json["sidebar"] = {
+            "before_lesson": _strip_html(filename, html_parsing),
+            "goal": [_strip_html(goal, html_parsing) for goal in goals],
+            "application": [_strip_html(app, html_parsing) for app in applications],
+            "level": ["ممتاز", "متوسط", "ضعيف"],  # Standard levels
+            "notice": ""
+        }
+        worksheet_json["vocabulary"] = [
+            {
+                "term": _strip_html(v.get("term", ""), html_parsing),
+                "definition": _strip_html(v.get("definition", ""), html_parsing)
+            }
+            for v in vocabulary
+        ]
+        worksheet_json["teacher_guidelines"] = [
+            _strip_html(guideline, html_parsing) for guideline in teacher_guidelines
+        ]
+        # Add applications as a top-level field for easy access
+        worksheet_json["applications"] = [
+            _strip_html(app, html_parsing) for app in applications
+        ]
+        
+        worksheet_json["header_config"]["worksheet_number"] = "ورقة عمل 1"
+        worksheet_json["title"] = "ورقة عمل - " + worksheet_json["title"]
+    else:
+        # Question bank format
+        worksheet_json["title"] = "بنك أسئلة - " + worksheet_json["title"]
+
+    # If user requested a lean question_bank, provide a compact structure
+    if output == "question_bank":
+        qb = {
+            "title": _strip_html(filename, html_parsing),
+            "questions": all_multiple_choice + all_essay,
+            "header_config": worksheet_json["header_config"],
+            "meta": worksheet_json["meta"]
+        }
+        final = qb
+    else:
+        final = worksheet_json
+
+    # optionally convert ObjectId to strings for safe json.dumps consumers
+    if not include_raw_meta:
+        final_copy = _oid_to_serializable(final)
+    else:
+        final_copy = final
+
+    client.close()
+    return final_copy
+
+
+def create_mindmap_from_ai_db(document_uuid: str,
+                             mongo_uri: str = "mongodb://localhost:27017",
+                             db_name: str = "ai",
+                             html_parsing: bool = True,
+                             include_raw_meta: bool = False
+                             ) -> Dict[str, Any]:
+    """
+    Extract mindmap data from AI database structure.
+    
+    Parameters:
+      - document_uuid: The document UUID to find in mindmaps collection
+      - html_parsing: True -> keep HTML/markup (but unescape entities).
+                      False -> strip all HTML tags and return plain text.
+      - include_raw_meta: If True, return the raw data in 'meta' (may contain ObjectId).
+                         If False, meta will be pre-serialized (ObjectId -> str).
+    """
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
+
+    # Find mindmap document by document_uuid
+    mindmap_doc = db.mindmaps.find_one({"document_uuid": document_uuid})
+    if not mindmap_doc:
+        client.close()
+        raise ValueError(f"Mindmap document with UUID={document_uuid} not found")
+
+    # Extract mindmap data
+    mindmap_data = mindmap_doc.get("mindmap", {})
+    filename = mindmap_doc.get("filename", "")
+    
+    # Build the mindmap JSON structure
+    mindmap_json = {
+        "title": _strip_html(filename, html_parsing),
+        "mindmap": mindmap_data,
+        "meta": {
+            "mindmap_doc": mindmap_doc,
+            "filename": filename,
+            "node_count": len(mindmap_data.get("nodeDataArray", [])),
+            "document_uuid": document_uuid
+        }
+    }
+
+    # optionally convert ObjectId to strings for safe json.dumps consumers
+    if not include_raw_meta:
+        final_copy = _oid_to_serializable(mindmap_json)
+    else:
+        final_copy = mindmap_json
 
     client.close()
     return final_copy
@@ -679,6 +904,9 @@ app.add_middleware(
 def _get_lesson_title(lesson_doc, html_parsing):
     return _strip_html(lesson_doc.get('title', 'lesson'), html_parsing)
 
+def _get_document_title(worksheet_doc, html_parsing):
+    return _strip_html(worksheet_doc.get('filename', 'document'), html_parsing)
+
 def _limit_questions(data, num_questions):
     if not num_questions or num_questions <= 0:
         return data
@@ -691,28 +919,103 @@ def _limit_questions(data, num_questions):
         data['questions'] = data['questions'][:num_questions]
     return data
 
+def _limit_questions_by_type(data, multiple_choice_count=-1, true_false_count=-1, short_answer_count=-1, complete_count=-1):
+    """
+    Limit questions by specific types with individual controls.
+    
+    Parameters:
+        -1: Include all questions of this type
+         0: Include no questions of this type  
+         N: Include exactly N questions of this type
+    """
+    
+    # Handle multiple choice questions (includes both multiple_choice and true_false)
+    if 'multiple_choice' in data and 'questions' in data['multiple_choice']:
+        mc_questions = data['multiple_choice']['questions']
+        
+        # Separate multiple choice and true/false
+        pure_mc = [q for q in mc_questions if q.get('type') == 'multiple_choice']
+        true_false = [q for q in mc_questions if q.get('type') == 'true_false']
+        other_mc = [q for q in mc_questions if q.get('type') not in ['multiple_choice', 'true_false']]
+        
+        final_mc_questions = []
+        
+        # Apply multiple choice limit
+        if multiple_choice_count != 0:
+            if multiple_choice_count == -1:
+                final_mc_questions.extend(pure_mc)
+            else:
+                final_mc_questions.extend(pure_mc[:multiple_choice_count])
+        
+        # Apply true/false limit
+        if true_false_count != 0:
+            if true_false_count == -1:
+                final_mc_questions.extend(true_false)
+            else:
+                final_mc_questions.extend(true_false[:true_false_count])
+        
+        # Add other unclassified questions
+        final_mc_questions.extend(other_mc)
+        
+        data['multiple_choice']['questions'] = final_mc_questions
+    
+    # Handle essay questions (short answer + complete)
+    if 'essay' in data and 'questions' in data['essay']:
+        essay_questions = data['essay']['questions']
+        
+        # Separate by type
+        short_answer_qs = [q for q in essay_questions if q.get('type') == 'short_answer']
+        complete_qs = [q for q in essay_questions if q.get('type') == 'complete']
+        other_qs = [q for q in essay_questions if q.get('type') not in ['short_answer', 'complete']]
+        
+        # Apply limits
+        final_essay_questions = []
+        
+        if short_answer_count != 0:
+            if short_answer_count == -1:
+                final_essay_questions.extend(short_answer_qs)
+            else:
+                final_essay_questions.extend(short_answer_qs[:short_answer_count])
+        
+        if complete_count != 0:
+            if complete_count == -1:
+                final_essay_questions.extend(complete_qs)
+            else:
+                final_essay_questions.extend(complete_qs[:complete_count])
+        
+        # Add other questions that couldn't be classified
+        final_essay_questions.extend(other_qs)
+        
+        data['essay']['questions'] = final_essay_questions
+    
+    return data
+
 @app.get("/generate-worksheet/")
 def generate_worksheet(
-    lesson_id: str = Query(..., description="Lesson ID (ObjectId string or numeric lessonId)"),
+    document_uuid: str = Query(..., description="Document UUID from AI database"),
     output: str = Query("worksheet", description="worksheet or question_bank"),
-    num_questions: int = Query(0, description="Number of questions to include (0 = all)"),
+    num_questions: int = Query(0, description="Number of questions to include (0 = all, legacy parameter)"),
+    multiple_choice_count: int = Query(-1, description="Number of multiple choice questions (-1 = all, 0 = none, N = exact count)"),
+    true_false_count: int = Query(-1, description="Number of true/false questions (-1 = all, 0 = none, N = exact count)"),
+    short_answer_count: int = Query(-1, description="Number of short answer questions (-1 = all, 0 = none, N = exact count)"),
+    complete_count: int = Query(-1, description="Number of complete/fill-in-blank questions (-1 = all, 0 = none, N = exact count)"),
     generate_pdf: bool = Query(True, description="Generate PDF files (default: True)"),
     html_parsing: bool = Query(False, description="Keep HTML markup (default: False)"),
     mongo_uri: str = Query(None, description="Override MongoDB URI (uses env MONGO_URI if not provided)"),
     db_name: str = Query(None, description="Override DB name (uses env DB_NAME if not provided)")
 ):
     """
-    Generate worksheet/question bank for a lesson. Returns files: JSON, DOCX, and optionally PDF.
-    lesson_id can be either an ObjectId string or numeric lessonId for backward compatibility.
+    Generate worksheet/question bank for a document from AI database. Returns files: JSON, DOCX, and optionally PDF.
+    Uses document_uuid to find data in questions and worksheets collections.
     """
     try:
         # Use environment variables as defaults
         effective_mongo_uri = mongo_uri or MONGO_URI
         effective_db_name = db_name or DB_NAME
 
-        # Get worksheet/question bank data
-        data = create_worksheet_from_lesson(
-            lesson_id=lesson_id,
+        # Get worksheet/question bank data from AI database
+        data = create_worksheet_from_ai_db(
+            document_uuid=document_uuid,
             mongo_uri=effective_mongo_uri,
             db_name=effective_db_name,
             html_parsing=html_parsing,
@@ -720,38 +1023,36 @@ def generate_worksheet(
             include_raw_meta=False
         )
 
-        # Limit number of questions if requested
+        # Apply question type-specific limits
+        data = _limit_questions_by_type(
+            data, 
+            multiple_choice_count=multiple_choice_count,
+            true_false_count=true_false_count,
+            short_answer_count=short_answer_count,
+            complete_count=complete_count
+        )
+
+        # Legacy support: if num_questions is specified, use old limiting method
         if num_questions and num_questions > 0:
             data = _limit_questions(data, num_questions)
 
-        # Get lesson title for file naming
+        # Get document title for file naming
         client = MongoClient(effective_mongo_uri)
         db = client[effective_db_name]
         
-        # Use same flexible search as in create_worksheet_from_lesson
-        lesson_doc = None
-        try:
-            # Try as ObjectId first
-            obj_id = ObjectId(lesson_id)
-            lesson_doc = db.lessons.find_one({"_id": obj_id})
-        except:
-            # If not valid ObjectId, try as numeric lessonId
-            try:
-                numeric_id = int(lesson_id)
-                lesson_doc = db.lessons.find_one({"lessonId": numeric_id})
-            except:
-                # Try as string lessonId
-                lesson_doc = db.lessons.find_one({"lessonId": lesson_id})
+        # Find document in worksheets collection for title
+        worksheet_doc = db.worksheets.find_one({"document_uuid": document_uuid})
+        if not worksheet_doc:
+            client.close()
+            return {"error": f"Worksheet document with UUID {document_uuid} not found"}
         
         client.close()
-        lesson_title = _get_lesson_title(lesson_doc, html_parsing) if lesson_doc else f"lesson_{lesson_id}"
-        
-        # Clean lesson title for filename
-        lesson_title_clean = re.sub(r'[<>:"/\\|?*]', '_', lesson_title)
-        suffix = "_ورقة_عمل" if output == "worksheet" else "_بنك_أسئله"
-        base_filename = f"{lesson_title_clean}{suffix}"
+        document_title = _get_document_title(worksheet_doc, html_parsing) if worksheet_doc else f"document_{document_uuid}"
 
-        # Create copies for solutions and no solutions
+        # Clean document title for filename
+        document_title_clean = re.sub(r'[<>:"/\\|?*]', '_', document_title)
+        suffix = "_ورقة_عمل" if output == "worksheet" else "_بنك_أسئله"
+        base_filename = f"{document_title_clean}{suffix}"        # Create copies for solutions and no solutions
         data_with_solutions = copy.deepcopy(data)
         data_no_solutions = copy.deepcopy(data)
         
@@ -770,7 +1071,7 @@ def generate_worksheet(
 
         # Initialize result
         result = {
-            "lesson_title": lesson_title,
+            "document_title": document_title,
             "base_filename": base_filename,
             "generate_pdf": generate_pdf,
             "files": {},
@@ -848,7 +1149,7 @@ def generate_worksheet(
         # Upload files to S3
         if local_files:
             try:
-                s3_upload_result = upload_worksheet_files(local_files, lesson_title)
+                s3_upload_result = upload_worksheet_files(local_files, document_title)
                 result["s3_uploads"] = s3_upload_result
                 
                 # Clean up local temporary files after successful upload
@@ -876,8 +1177,182 @@ def generate_worksheet(
     except Exception as e:
         return {
             "error": str(e),
-            "lesson_id": lesson_id,
+            "document_uuid": document_uuid,
             "output": output
+        }
+
+
+@app.get("/generate-worksheet-legacy/")
+def generate_worksheet_legacy(
+    lesson_id: str = Query(..., description="Lesson ID (ObjectId string or numeric lessonId) - Legacy format"),
+    output: str = Query("worksheet", description="worksheet or question_bank"),
+    num_questions: int = Query(0, description="Number of questions to include (0 = all)"),
+    generate_pdf: bool = Query(True, description="Generate PDF files (default: True)"),
+    html_parsing: bool = Query(False, description="Keep HTML markup (default: False)"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI (uses env MONGO_URI if not provided)"),
+    db_name: str = Query(None, description="Override DB name (uses env DB_NAME if not provided)")
+):
+    """
+    Legacy endpoint for generating worksheets from the old IEN database structure.
+    This endpoint maintains backward compatibility with the old lesson-based approach.
+    """
+    try:
+        # Use environment variables as defaults, but force to use IEN database for legacy
+        legacy_mongo_uri = mongo_uri or "mongodb://ai:VgjVpcllJjhYy2c@65.109.31.94:27017/ien?authSource=ien"
+        legacy_db_name = db_name or "ien"
+
+        # Get worksheet/question bank data using the legacy function
+        data = create_worksheet_from_lesson(
+            lesson_id=lesson_id,
+            mongo_uri=legacy_mongo_uri,
+            db_name=legacy_db_name,
+            html_parsing=html_parsing,
+            output=output,
+            include_raw_meta=False
+        )
+
+        # Limit number of questions if requested
+        if num_questions and num_questions > 0:
+            data = _limit_questions(data, num_questions)
+
+        # Return minimal JSON response for legacy compatibility
+        return {
+            "status": "success",
+            "data": data,
+            "lesson_id": lesson_id,
+            "output": output,
+            "message": "Legacy worksheet generated successfully"
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e),
+            "lesson_id": lesson_id,
+            "output": output,
+            "message": "Legacy worksheet generation failed"
+        }
+
+
+@app.get("/search-documents/")
+def search_documents(
+    query: str = Query(..., description="Search query: document UUID, filename, or text fragment"),
+    limit: int = Query(10, description="Maximum number of results"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    Search for documents in the AI database by UUID, filename, or text fragment.
+    Returns document information to help find the correct document_uuid for worksheet generation.
+    """
+    try:
+        effective_mongo_uri = mongo_uri or MONGO_URI
+        effective_db_name = db_name or DB_NAME
+        
+        client = MongoClient(effective_mongo_uri)
+        db = client[effective_db_name]
+        
+        search_filters = []
+        
+        # Try document UUID search
+        search_filters.append({"document_uuid": query})
+        
+        # Try filename search
+        search_filters.append({"filename": {"$regex": query, "$options": "i"}})
+        
+        # Build query
+        if len(search_filters) > 1:
+            final_query = {"$or": search_filters}
+        elif len(search_filters) == 1:
+            final_query = search_filters[0]
+        else:
+            final_query = {}
+        
+        # Search in both collections
+        worksheets = list(db.worksheets.find(final_query).limit(limit))
+        questions = list(db.questions.find(final_query).limit(limit))
+        
+        client.close()
+        
+        # Format results
+        results = []
+        
+        # Add worksheet results
+        for doc in worksheets:
+            results.append({
+                "_id": str(doc.get("_id")),
+                "document_uuid": doc.get("document_uuid"),
+                "filename": doc.get("filename"),
+                "type": "worksheet",
+                "goals_count": len(doc.get("goals", [])),
+                "generated_at": doc.get("generated_at")
+            })
+        
+        # Add question results (if not already included from worksheets)
+        existing_uuids = {r["document_uuid"] for r in results}
+        for doc in questions:
+            if doc.get("document_uuid") not in existing_uuids:
+                results.append({
+                    "_id": str(doc.get("_id")),
+                    "document_uuid": doc.get("document_uuid"),
+                    "filename": doc.get("filename"),
+                    "type": "questions",
+                    "questions_count": sum(len(doc.get("questions", {}).get(qtype, [])) 
+                                         for qtype in ["multiple_choice", "true_false", "short_answer", "complete"]),
+                    "generated_at": doc.get("generated_at")
+                })
+        
+        return {
+            "query": query,
+            "total_results": len(results),
+            "results": results
+        }
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "query": query
+        }
+
+
+@app.get("/document-details/{document_uuid}")
+def get_document_details(
+    document_uuid: str,
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    Get detailed information about a document by UUID from the AI database.
+    Shows both worksheet and questions data.
+    """
+    try:
+        effective_mongo_uri = mongo_uri or MONGO_URI
+        effective_db_name = db_name or DB_NAME
+        
+        client = MongoClient(effective_mongo_uri)
+        db = client[effective_db_name]
+        
+        # Find documents by UUID
+        worksheet_doc = db.worksheets.find_one({"document_uuid": document_uuid})
+        questions_doc = db.questions.find_one({"document_uuid": document_uuid})
+        
+        if not worksheet_doc and not questions_doc:
+            client.close()
+            return {"error": f"Document with UUID {document_uuid} not found"}
+        
+        # Build details response
+        details = {
+            "document_uuid": document_uuid,
+            "worksheet_data": _oid_to_serializable(worksheet_doc) if worksheet_doc else None,
+            "questions_data": _oid_to_serializable(questions_doc) if questions_doc else None
+        }
+        
+        client.close()
+        return details
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "document_uuid": document_uuid
         }
 
 
