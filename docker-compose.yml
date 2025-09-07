@@ -2,7 +2,7 @@ services:
   qa-worksheet-generator:
     build:
       context: .
-      dockerfile: Dockerfile.basic
+      dockerfile: Dockerfile.working
     container_name: qa_worksheet_generator
     ports:
       - "8081:8081"
@@ -34,6 +34,10 @@ services:
       
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      
+      # Playwright configuration
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+      - PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true
       
     volumes:
       # Mount logs for persistence

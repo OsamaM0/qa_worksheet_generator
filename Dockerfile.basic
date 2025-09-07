@@ -17,9 +17,11 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies (without playwright for now)
+# Install Python dependencies (including playwright)
 RUN pip install --upgrade pip && \
-    pip install fastapi uvicorn pymongo python-docx reportlab PyPDF2 Pillow python-dotenv requests boto3 tqdm
+    pip install fastapi uvicorn pymongo python-docx reportlab PyPDF2 Pillow python-dotenv requests boto3 tqdm playwright && \
+    playwright install-deps || echo "Playwright deps install failed, continuing..." && \
+    playwright install chromium || echo "Chromium install failed, continuing..."
 
 # Copy all application files
 COPY . .
