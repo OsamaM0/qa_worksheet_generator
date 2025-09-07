@@ -19,6 +19,9 @@ python-bidi>=0.4.2
 # Image processing
 Pillow>=10.4.0
 
+# Mindmap image generation
+playwright>=1.47.0
+
 # Environment variables
 python-dotenv>=1.0.0
 
@@ -37,3 +40,4 @@ tqdm>=4.66.5
 
 # Note: unoconv and LibreOffice are installed via system packages in Dockerfile
 # Note: Development dependencies removed for production
+# Note: After installing playwright, run: playwright install chromium

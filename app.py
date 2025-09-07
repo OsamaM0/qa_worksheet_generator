@@ -12,11 +12,18 @@ from worksheet_generator import WorksheetService
 import os
 import tempfile
 import copy
+import logging
+from datetime import datetime
 from dotenv import load_dotenv
 from s3_service import get_s3_service, upload_worksheet_files
+from mindmap_service import get_mindmap_service
 
 # Load environment variables
 load_dotenv()
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # MongoDB configuration from environment
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://ai:VgjVpcllJjhYy2c@65.109.31.94:27017/ien?authSource=admin&serverSelectionTimeoutMS=30000&connectTimeoutMS=30000")
@@ -892,7 +899,12 @@ class PDFConverter:
 
 
 # --- FastAPI App ---
-app = FastAPI()
+app = FastAPI(
+    title="QA Worksheet Generator API",
+    description="API for generating worksheets, questions, and mindmaps with S3 storage",
+    version="2.0.0"
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -900,6 +912,374 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def generate_worksheet_with_custom_counts(document_uuid: str, mongo_uri: str, db_name: str, 
+                                       multiple_choice_count: int, true_false_count: int, 
+                                       short_answer_count: int, complete_count: int,
+                                       include_solutions: bool = False, 
+                                       generate_pdf: bool = False) -> Dict[str, Any]:
+    """
+    Generate worksheet DOCX with custom question counts and solution options.
+    Optionally convert to PDF if generate_pdf is True.
+    """
+    try:
+        # Get worksheet data from AI database
+        data = create_worksheet_from_ai_db(
+            document_uuid=document_uuid,
+            mongo_uri=mongo_uri,
+            db_name=db_name,
+            html_parsing=False,
+            output="worksheet",
+            include_raw_meta=False
+        )
+
+        # Apply question type-specific limits
+        data = _limit_questions_by_type(
+            data, 
+            multiple_choice_count=multiple_choice_count,
+            true_false_count=true_false_count,
+            short_answer_count=short_answer_count,
+            complete_count=complete_count
+        )
+
+        # Get document title for file naming
+        client = MongoClient(mongo_uri)
+        db = client[db_name]
+        
+        worksheet_doc = db.worksheets.find_one({"document_uuid": document_uuid})
+        if not worksheet_doc:
+            client.close()
+            return {"status": "error", "message": f"Worksheet document with UUID {document_uuid} not found"}
+        
+        client.close()
+        document_title = _get_document_title(worksheet_doc, False)
+
+        # Clean document title for filename
+        document_title_clean = re.sub(r'[<>:"/\\|?*]', '_', document_title)
+        solution_suffix = "_with_solutions" if include_solutions else "_no_solutions"
+        base_filename = f"{document_title_clean}_ورقة_عمل{solution_suffix}"
+        
+        # Create copy for solution handling
+        data_final = copy.deepcopy(data)
+        
+        # Remove answers if no solutions requested
+        if not include_solutions:
+            def _remove_answers(d):
+                if isinstance(d, dict):
+                    for k in list(d.keys()):
+                        if k in ("answer_key", "answer"):
+                            d[k] = None
+                        else:
+                            _remove_answers(d[k])
+                elif isinstance(d, list):
+                    for item in d:
+                        _remove_answers(item)
+            _remove_answers(data_final)
+
+        # Generate DOCX
+        service = WorksheetService()
+        docx_path = os.path.join(tempfile.gettempdir(), f"{base_filename}.docx")
+        docx_result = service.create_worksheet(data_final, docx_path)
+        
+        if docx_result["status"] != "success":
+            return {"status": "error", "message": f"DOCX generation failed: {docx_result['message']}"}
+
+        # Return DOCX by default
+        result = {
+            "status": "success",
+            "file_path": docx_path,
+            "filename": f"{base_filename}.docx",
+            "format": "docx"
+        }
+
+        # Convert to PDF only if requested
+        if generate_pdf:
+            pdf_path = os.path.join(tempfile.gettempdir(), f"{base_filename}.pdf")
+            pdf_converter = PDFConverter("logo.png")
+            
+            if pdf_converter.convert_docx_to_pdf(docx_path, pdf_path):
+                # Clean up DOCX since we're returning PDF
+                try:
+                    os.remove(docx_path)
+                except:
+                    pass
+                
+                result = {
+                    "status": "success",
+                    "file_path": pdf_path,
+                    "filename": f"{base_filename}.pdf",
+                    "format": "pdf"
+                }
+            else:
+                # If PDF conversion fails, return DOCX
+                result["pdf_conversion_failed"] = True
+                result["message"] = "DOCX generated successfully, but PDF conversion failed"
+        
+        return result
+            
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def generate_question_bank_with_custom_counts(document_uuid: str, mongo_uri: str, db_name: str, 
+                                            multiple_choice_count: int, true_false_count: int, 
+                                            short_answer_count: int, complete_count: int,
+                                            include_solutions: bool = False,
+                                            generate_pdf: bool = False) -> Dict[str, Any]:
+    """
+    Generate question bank DOCX with custom question counts and solution options.
+    Optionally convert to PDF if generate_pdf is True.
+    """
+    try:
+        # Get question bank data from AI database
+        data = create_worksheet_from_ai_db(
+            document_uuid=document_uuid,
+            mongo_uri=mongo_uri,
+            db_name=db_name,
+            html_parsing=False,
+            output="question_bank",
+            include_raw_meta=False
+        )
+
+        # Apply question type-specific limits
+        data = _limit_questions_by_type(
+            data, 
+            multiple_choice_count=multiple_choice_count,
+            true_false_count=true_false_count,
+            short_answer_count=short_answer_count,
+            complete_count=complete_count
+        )
+
+        # Get document title for file naming
+        client = MongoClient(mongo_uri)
+        db = client[db_name]
+        
+        worksheet_doc = db.worksheets.find_one({"document_uuid": document_uuid})
+        if not worksheet_doc:
+            client.close()
+            return {"status": "error", "message": f"Document with UUID {document_uuid} not found"}
+        
+        client.close()
+        document_title = _get_document_title(worksheet_doc, False)
+
+        # Clean document title for filename
+        document_title_clean = re.sub(r'[<>:"/\\|?*]', '_', document_title)
+        solution_suffix = "_with_solutions" if include_solutions else "_no_solutions"
+        base_filename = f"{document_title_clean}_بنك_أسئله{solution_suffix}"
+        
+        # Create copy for solution handling
+        data_final = copy.deepcopy(data)
+        
+        # Remove answers if no solutions requested
+        if not include_solutions:
+            def _remove_answers(d):
+                if isinstance(d, dict):
+                    for k in list(d.keys()):
+                        if k in ("answer_key", "answer"):
+                            d[k] = None
+                        else:
+                            _remove_answers(d[k])
+                elif isinstance(d, list):
+                    for item in d:
+                        _remove_answers(item)
+            _remove_answers(data_final)
+
+        # Generate DOCX
+        service = WorksheetService()
+        docx_path = os.path.join(tempfile.gettempdir(), f"{base_filename}.docx")
+        docx_result = service.create_worksheet(data_final, docx_path)
+        
+        if docx_result["status"] != "success":
+            return {"status": "error", "message": f"DOCX generation failed: {docx_result['message']}"}
+
+        # Return DOCX by default
+        result = {
+            "status": "success",
+            "file_path": docx_path,
+            "filename": f"{base_filename}.docx",
+            "format": "docx"
+        }
+
+        # Convert to PDF only if requested
+        if generate_pdf:
+            pdf_path = os.path.join(tempfile.gettempdir(), f"{base_filename}.pdf")
+            pdf_converter = PDFConverter("logo.png")
+            
+            if pdf_converter.convert_docx_to_pdf(docx_path, pdf_path):
+                # Clean up DOCX since we're returning PDF
+                try:
+                    os.remove(docx_path)
+                except:
+                    pass
+                
+                result = {
+                    "status": "success",
+                    "file_path": pdf_path,
+                    "filename": f"{base_filename}.pdf",
+                    "format": "pdf"
+                }
+            else:
+                # If PDF conversion fails, return DOCX
+                result["pdf_conversion_failed"] = True
+                result["message"] = "DOCX generated successfully, but PDF conversion failed"
+        
+        return result
+            
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def generate_worksheet_pdf(document_uuid: str, mongo_uri: str, db_name: str) -> Dict[str, Any]:
+    """
+    Generate only worksheet PDF for the unified endpoint
+    """
+    try:
+        # Get worksheet data from AI database
+        data = create_worksheet_from_ai_db(
+            document_uuid=document_uuid,
+            mongo_uri=mongo_uri,
+            db_name=db_name,
+            html_parsing=False,
+            output="worksheet",
+            include_raw_meta=False
+        )
+
+        # Get document title for file naming
+        client = MongoClient(mongo_uri)
+        db = client[db_name]
+        
+        worksheet_doc = db.worksheets.find_one({"document_uuid": document_uuid})
+        if not worksheet_doc:
+            client.close()
+            return {"status": "error", "message": f"Worksheet document with UUID {document_uuid} not found"}
+        
+        client.close()
+        document_title = _get_document_title(worksheet_doc, False)
+
+        # Clean document title for filename
+        document_title_clean = re.sub(r'[<>:"/\\|?*]', '_', document_title)
+        base_filename = f"{document_title_clean}_ورقة_عمل"
+        
+        # Create version without solutions
+        data_no_solutions = copy.deepcopy(data)
+        def _remove_answers(d):
+            if isinstance(d, dict):
+                for k in list(d.keys()):
+                    if k in ("answer_key", "answer"):
+                        d[k] = None
+                    else:
+                        _remove_answers(d[k])
+            elif isinstance(d, list):
+                for item in d:
+                    _remove_answers(item)
+        _remove_answers(data_no_solutions)
+
+        # Generate DOCX first
+        service = WorksheetService()
+        docx_path = os.path.join(tempfile.gettempdir(), f"{base_filename}.docx")
+        docx_result = service.create_worksheet(data_no_solutions, docx_path)
+        
+        if docx_result["status"] != "success":
+            return {"status": "error", "message": f"DOCX generation failed: {docx_result['message']}"}
+
+        # Convert to PDF
+        pdf_path = os.path.join(tempfile.gettempdir(), f"{base_filename}.pdf")
+        pdf_converter = PDFConverter("logo.png")
+        
+        if pdf_converter.convert_docx_to_pdf(docx_path, pdf_path):
+            # Clean up DOCX
+            try:
+                os.remove(docx_path)
+            except:
+                pass
+            
+            return {
+                "status": "success",
+                "file_path": pdf_path,
+                "filename": f"{base_filename}.pdf"
+            }
+        else:
+            return {"status": "error", "message": "DOCX to PDF conversion failed"}
+            
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def generate_question_bank_pdf(document_uuid: str, mongo_uri: str, db_name: str) -> Dict[str, Any]:
+    """
+    Generate only question bank PDF for the unified endpoint
+    """
+    try:
+        # Get question bank data from AI database
+        data = create_worksheet_from_ai_db(
+            document_uuid=document_uuid,
+            mongo_uri=mongo_uri,
+            db_name=db_name,
+            html_parsing=False,
+            output="question_bank",
+            include_raw_meta=False
+        )
+
+        # Get document title for file naming
+        client = MongoClient(mongo_uri)
+        db = client[db_name]
+        
+        worksheet_doc = db.worksheets.find_one({"document_uuid": document_uuid})
+        if not worksheet_doc:
+            client.close()
+            return {"status": "error", "message": f"Document with UUID {document_uuid} not found"}
+        
+        client.close()
+        document_title = _get_document_title(worksheet_doc, False)
+
+        # Clean document title for filename
+        document_title_clean = re.sub(r'[<>:"/\\|?*]', '_', document_title)
+        base_filename = f"{document_title_clean}_بنك_أسئله"
+        
+        # Create version without solutions
+        data_no_solutions = copy.deepcopy(data)
+        def _remove_answers(d):
+            if isinstance(d, dict):
+                for k in list(d.keys()):
+                    if k in ("answer_key", "answer"):
+                        d[k] = None
+                    else:
+                        _remove_answers(d[k])
+            elif isinstance(d, list):
+                for item in d:
+                    _remove_answers(item)
+        _remove_answers(data_no_solutions)
+
+        # Generate DOCX first
+        service = WorksheetService()
+        docx_path = os.path.join(tempfile.gettempdir(), f"{base_filename}.docx")
+        docx_result = service.create_worksheet(data_no_solutions, docx_path)
+        
+        if docx_result["status"] != "success":
+            return {"status": "error", "message": f"DOCX generation failed: {docx_result['message']}"}
+
+        # Convert to PDF
+        pdf_path = os.path.join(tempfile.gettempdir(), f"{base_filename}.pdf")
+        pdf_converter = PDFConverter("logo.png")
+        
+        if pdf_converter.convert_docx_to_pdf(docx_path, pdf_path):
+            # Clean up DOCX
+            try:
+                os.remove(docx_path)
+            except:
+                pass
+            
+            return {
+                "status": "success",
+                "file_path": pdf_path,
+                "filename": f"{base_filename}.pdf"
+            }
+        else:
+            return {"status": "error", "message": "DOCX to PDF conversion failed"}
+            
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 def _get_lesson_title(lesson_doc, html_parsing):
     return _strip_html(lesson_doc.get('title', 'lesson'), html_parsing)
@@ -1720,3 +2100,1123 @@ def list_uploaded_files(
             "status": "error",
             "message": str(e)
         }
+
+
+@app.get("/generate-mindmap-image/")
+def generate_mindmap_image(
+    document_uuid: str = Query(..., description="Document UUID from AI database mindmaps collection"),
+    width: int = Query(1200, description="Image width in pixels"),
+    height: int = Query(800, description="Image height in pixels"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    Generate mindmap image from AI database and upload to S3.
+    Returns public URL of the generated image.
+    
+    Args:
+        document_uuid: Document UUID to find in mindmaps collection
+        width: Image width in pixels (default: 1200)
+        height: Image height in pixels (default: 800)
+        mongo_uri: Override MongoDB URI
+        db_name: Override DB name
+    
+    Returns:
+        Dictionary with generation results and public URL
+    """
+    try:
+        mindmap_service = get_mindmap_service()
+        
+        # Update the service with custom DB settings if provided
+        if mongo_uri or db_name:
+            # We need to handle custom DB settings
+            effective_mongo_uri = mongo_uri or MONGO_URI
+            effective_db_name = db_name or DB_NAME
+            
+            # For now, we'll use the default settings and note this limitation
+            logger.warning("Custom mongo_uri/db_name not yet implemented for mindmap service")
+        
+        # Process mindmap from database
+        result = mindmap_service.process_mindmap_from_db(
+            document_uuid=document_uuid,
+            width=width,
+            height=height
+        )
+        
+        return result
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "document_uuid": document_uuid
+        }
+
+
+@app.post("/generate-mindmap-image-from-json/")
+def generate_mindmap_image_from_json(
+    mindmap_data: Dict[str, Any],
+    title: str = Query("custom_mindmap", description="Title for file naming"),
+    width: int = Query(1200, description="Image width in pixels"),
+    height: int = Query(800, description="Image height in pixels")
+):
+    """
+    Generate mindmap image from provided JSON data and upload to S3.
+    
+    Args:
+        mindmap_data: The mindmap JSON data (in request body)
+        title: Title for file naming
+        width: Image width in pixels
+        height: Image height in pixels
+    
+    Returns:
+        Dictionary with generation results and public URL
+    """
+    try:
+        mindmap_service = get_mindmap_service()
+        
+        # Generate image from provided JSON
+        result = mindmap_service.generate_image_from_json(
+            mindmap_json=mindmap_data,
+            title=title,
+            width=width,
+            height=height
+        )
+        
+        return result
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "title": title
+        }
+
+
+@app.get("/test-mindmap-sample/")
+def test_mindmap_sample(
+    width: int = Query(1200, description="Image width in pixels"),
+    height: int = Query(800, description="Image height in pixels")
+):
+    """
+    Test endpoint to generate a sample mindmap image.
+    Useful for testing the mindmap image generation functionality.
+    
+    Args:
+        width: Image width in pixels
+        height: Image height in pixels
+    
+    Returns:
+        Dictionary with generation results and public URL
+    """
+    try:
+        mindmap_service = get_mindmap_service()
+        
+        # Create sample mindmap data
+        sample_data = mindmap_service.create_sample_mindmap_data()
+        
+        # Generate image
+        result = mindmap_service.generate_image_from_json(
+            mindmap_json=sample_data,
+            title="sample_test_mindmap",
+            width=width,
+            height=height
+        )
+        
+        # Add sample data to result for reference
+        if result["status"] == "success":
+            result["sample_data"] = sample_data
+        
+        return result
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+@app.get("/search-mindmaps/")
+def search_mindmaps(
+    query: str = Query(..., description="Search query: document UUID, filename, or text fragment"),
+    limit: int = Query(10, description="Maximum number of results"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    Search for mindmap documents in the AI database by UUID, filename, or text fragment.
+    Returns mindmap information to help find the correct document_uuid for image generation.
+    """
+    try:
+        effective_mongo_uri = mongo_uri or MONGO_URI
+        effective_db_name = db_name or DB_NAME
+        
+        client = MongoClient(effective_mongo_uri)
+        db = client[effective_db_name]
+        
+        search_filters = []
+        
+        # Try document UUID search
+        search_filters.append({"document_uuid": query})
+        
+        # Try filename search
+        search_filters.append({"filename": {"$regex": query, "$options": "i"}})
+        
+        # Build query
+        if len(search_filters) > 1:
+            final_query = {"$or": search_filters}
+        elif len(search_filters) == 1:
+            final_query = search_filters[0]
+        else:
+            final_query = {}
+        
+        # Search in mindmaps collection
+        mindmaps = list(db.mindmaps.find(final_query).limit(limit))
+        
+        client.close()
+        
+        # Format results
+        results = []
+        for doc in mindmaps:
+            mindmap_data = doc.get("mindmap", {})
+            node_count = len(mindmap_data.get("nodeDataArray", [])) if mindmap_data else 0
+            
+            results.append({
+                "_id": str(doc.get("_id")),
+                "document_uuid": doc.get("document_uuid"),
+                "filename": doc.get("filename"),
+                "node_count": node_count,
+                "has_mindmap_data": bool(mindmap_data),
+                "generated_at": doc.get("generated_at")
+            })
+        
+        return {
+            "query": query,
+            "total_results": len(results),
+            "results": results
+        }
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "query": query
+        }
+
+
+@app.get("/mindmap-details/{document_uuid}")
+def get_mindmap_details(
+    document_uuid: str,
+    include_full_data: bool = Query(False, description="Include full mindmap nodeDataArray"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    Get detailed information about a mindmap document by UUID from the AI database.
+    Shows mindmap structure and metadata.
+    """
+    try:
+        effective_mongo_uri = mongo_uri or MONGO_URI
+        effective_db_name = db_name or DB_NAME
+        
+        # Get mindmap data using existing function
+        mindmap_result = create_mindmap_from_ai_db(
+            document_uuid=document_uuid,
+            mongo_uri=effective_mongo_uri,
+            db_name=effective_db_name,
+            html_parsing=False,
+            include_raw_meta=False
+        )
+        
+        # Format the response
+        details = {
+            "document_uuid": document_uuid,
+            "title": mindmap_result.get("title"),
+            "node_count": mindmap_result.get("meta", {}).get("node_count", 0),
+            "filename": mindmap_result.get("meta", {}).get("filename"),
+            "meta": mindmap_result.get("meta", {})
+        }
+        
+        # Include full mindmap data if requested
+        if include_full_data:
+            details["mindmap_data"] = mindmap_result.get("mindmap", {})
+        else:
+            # Include just a sample of nodes for preview
+            mindmap_data = mindmap_result.get("mindmap", {})
+            if mindmap_data and "nodeDataArray" in mindmap_data:
+                nodes = mindmap_data["nodeDataArray"]
+                details["sample_nodes"] = nodes[:5]  # First 5 nodes as preview
+                details["total_nodes"] = len(nodes)
+        
+        return details
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "document_uuid": document_uuid
+        }
+
+
+# =============================================================================
+# NEW ORGANIZED API STRUCTURE v2.0
+# =============================================================================
+
+# ===== GROUP 1: WORKSHEET AND QUESTIONS =====
+
+@app.get("/api/v2/worksheets/generate")
+def generate_worksheet_v2(
+    document_uuid: str = Query(..., description="Document UUID from AI database"),
+    output: str = Query("worksheet", description="worksheet or question_bank"),
+    num_questions: int = Query(0, description="Number of questions to include (0 = all, legacy parameter)"),
+    multiple_choice_count: int = Query(-1, description="Number of multiple choice questions (-1 = all, 0 = none, N = exact count)"),
+    true_false_count: int = Query(-1, description="Number of true/false questions (-1 = all, 0 = none, N = exact count)"),
+    short_answer_count: int = Query(-1, description="Number of short answer questions (-1 = all, 0 = none, N = exact count)"),
+    complete_count: int = Query(-1, description="Number of complete/fill-in-blank questions (-1 = all, 0 = none, N = exact count)"),
+    generate_pdf: bool = Query(True, description="Generate PDF files (default: True)"),
+    html_parsing: bool = Query(False, description="Keep HTML markup (default: False)"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI (uses env MONGO_URI if not provided)"),
+    db_name: str = Query(None, description="Override DB name (uses env DB_NAME if not provided)")
+):
+    """
+    V2 API: Generate worksheet/question bank for a document from AI database.
+    Returns files: JSON, DOCX, and optionally PDF.
+    """
+    # Reuse the existing function but with v2 response format
+    result = generate_worksheet(document_uuid, output, num_questions, multiple_choice_count, 
+                              true_false_count, short_answer_count, complete_count, 
+                              generate_pdf, html_parsing, mongo_uri, db_name)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "worksheets/generate",
+        "success": "error" not in result,
+        "data": result
+    }
+
+
+@app.get("/api/v2/questions/generate")
+def generate_questions_v2(
+    document_uuid: str = Query(..., description="Document UUID from AI database"),
+    multiple_choice_count: int = Query(-1, description="Number of multiple choice questions (-1 = all, 0 = none, N = exact count)"),
+    true_false_count: int = Query(-1, description="Number of true/false questions (-1 = all, 0 = none, N = exact count)"),
+    short_answer_count: int = Query(-1, description="Number of short answer questions (-1 = all, 0 = none, N = exact count)"),
+    complete_count: int = Query(-1, description="Number of complete/fill-in-blank questions (-1 = all, 0 = none, N = exact count)"),
+    generate_pdf: bool = Query(True, description="Generate PDF files (default: True)"),
+    html_parsing: bool = Query(False, description="Keep HTML markup (default: False)"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    V2 API: Generate question bank specifically. Alias for worksheet generation with output=question_bank.
+    """
+    result = generate_worksheet(document_uuid, "question_bank", 0, multiple_choice_count, 
+                              true_false_count, short_answer_count, complete_count, 
+                              generate_pdf, html_parsing, mongo_uri, db_name)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "questions/generate",
+        "success": "error" not in result,
+        "data": result
+    }
+
+
+# ===== GROUP 2: MINDMAP =====
+
+@app.get("/api/v2/mindmaps/generate")
+def generate_mindmap_v2(
+    document_uuid: str = Query(..., description="Document UUID from AI database mindmaps collection"),
+    width: int = Query(1200, description="Image width in pixels"),
+    height: int = Query(800, description="Image height in pixels"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    V2 API: Generate mindmap image from AI database and upload to S3.
+    """
+    result = generate_mindmap_image(document_uuid, width, height, mongo_uri, db_name)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "mindmaps/generate",
+        "success": result.get("status") == "success",
+        "data": result
+    }
+
+
+@app.post("/api/v2/mindmaps/generate-from-json")
+def generate_mindmap_from_json_v2(
+    mindmap_data: Dict[str, Any],
+    title: str = Query("custom_mindmap", description="Title for file naming"),
+    width: int = Query(1200, description="Image width in pixels"),
+    height: int = Query(800, description="Image height in pixels")
+):
+    """
+    V2 API: Generate mindmap image from provided JSON data and upload to S3.
+    """
+    result = generate_mindmap_image_from_json(mindmap_data, title, width, height)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "mindmaps/generate-from-json",
+        "success": result.get("status") == "success",
+        "data": result
+    }
+
+
+@app.get("/api/v2/mindmaps/search")
+def search_mindmaps_v2(
+    query: str = Query(..., description="Search query: document UUID, filename, or text fragment"),
+    limit: int = Query(10, description="Maximum number of results"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    V2 API: Search for mindmap documents in the AI database.
+    """
+    result = search_mindmaps(query, limit, mongo_uri, db_name)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "mindmaps/search",
+        "success": "error" not in result,
+        "data": result
+    }
+
+
+@app.get("/api/v2/mindmaps/{document_uuid}")
+def get_mindmap_details_v2(
+    document_uuid: str,
+    include_full_data: bool = Query(False, description="Include full mindmap nodeDataArray"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    V2 API: Get detailed information about a mindmap document by UUID.
+    """
+    result = get_mindmap_details(document_uuid, include_full_data, mongo_uri, db_name)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "mindmaps/details",
+        "success": "error" not in result,
+        "data": result
+    }
+
+
+# ===== GROUP 3: STATUS AND HEALTH =====
+
+@app.get("/api/v2/status/pdf")
+def check_pdf_status_v2():
+    """
+    V2 API: Check the availability of PDF conversion tools on the server.
+    """
+    result = check_pdf_conversion_status()
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "status/pdf",
+        "success": result.get("pdf_conversion_available", False),
+        "data": result
+    }
+
+
+@app.get("/api/v2/status/s3")
+def check_s3_status_v2():
+    """
+    V2 API: Check the availability and health of S3/R2 storage service.
+    """
+    result = check_s3_status()
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "status/s3",
+        "success": result.get("status") == "healthy",
+        "data": result
+    }
+
+
+@app.get("/api/v2/status/health")
+def health_check_v2():
+    """
+    V2 API: Complete system health check including all services.
+    """
+    try:
+        # Check PDF status
+        pdf_status = check_pdf_conversion_status()
+        
+        # Check S3 status
+        s3_status = check_s3_status()
+        
+        # Check MongoDB connection
+        mongo_status = {"status": "unknown"}
+        try:
+            from pymongo import MongoClient
+            client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+            client.server_info()  # Will raise exception if can't connect
+            mongo_status = {"status": "healthy", "connection": "ok"}
+            client.close()
+        except Exception as e:
+            mongo_status = {"status": "unhealthy", "error": str(e)}
+        
+        # Overall system status
+        all_healthy = (
+            pdf_status.get("pdf_conversion_available", False) and
+            s3_status.get("status") == "healthy" and
+            mongo_status.get("status") == "healthy"
+        )
+        
+        return {
+            "api_version": "2.0",
+            "endpoint": "status/health",
+            "success": all_healthy,
+            "data": {
+                "overall_status": "healthy" if all_healthy else "degraded",
+                "services": {
+                    "pdf_conversion": pdf_status,
+                    "s3_storage": s3_status,
+                    "mongodb": mongo_status
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+        }
+        
+    except Exception as e:
+        return {
+            "api_version": "2.0",
+            "endpoint": "status/health",
+            "success": False,
+            "data": {
+                "overall_status": "unhealthy",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+        }
+
+
+# ===== GROUP 4: LESSONS AND DOCUMENTS =====
+
+@app.get("/api/v2/documents/search")
+def search_documents_v2(
+    query: str = Query(..., description="Search query: document UUID, filename, or text fragment"),
+    limit: int = Query(10, description="Maximum number of results"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    V2 API: Search for documents in the AI database by UUID, filename, or text fragment.
+    """
+    result = search_documents(query, limit, mongo_uri, db_name)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "documents/search",
+        "success": "error" not in result,
+        "data": result
+    }
+
+
+@app.get("/api/v2/documents/{document_uuid}")
+def get_document_details_v2(
+    document_uuid: str,
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    V2 API: Get detailed information about a document by UUID from the AI database.
+    """
+    result = get_document_details(document_uuid, mongo_uri, db_name)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "documents/details",
+        "success": "error" not in result,
+        "data": result
+    }
+
+
+@app.get("/api/v2/lessons/search")
+def search_lessons_v2(
+    query: str = Query(..., description="Search query: ObjectId, numeric lessonId, or title fragment"),
+    limit: int = Query(10, description="Maximum number of results"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    V2 API: Search for lessons by ObjectId, lessonId, or title fragment (legacy support).
+    """
+    result = search_lessons(query, limit, mongo_uri, db_name)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "lessons/search",
+        "success": "error" not in result,
+        "data": result
+    }
+
+
+@app.get("/api/v2/lessons/{lesson_identifier}")
+def get_lesson_details_v2(
+    lesson_identifier: str,
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    V2 API: Get detailed information about a lesson by ObjectId or lessonId (legacy support).
+    """
+    result = get_lesson_details(lesson_identifier, mongo_uri, db_name)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "lessons/details",
+        "success": "error" not in result,
+        "data": result
+    }
+
+
+# ===== UNIFIED ENDPOINT: CREATE ALL =====
+
+@app.post("/api/v2/create-all")
+def create_all_documents(
+    document_uuid: str = Query(..., description="Document UUID - if exists, specify override=true to replace"),
+    override: bool = Query(False, description="Override existing documents if they exist"),
+    
+    # Worksheet question counts
+    worksheet_multiple_choice_count: int = Query(-1, description="Number of multiple choice questions for worksheet (-1 = all, 0 = none, N = exact count)"),
+    worksheet_true_false_count: int = Query(-1, description="Number of true/false questions for worksheet (-1 = all, 0 = none, N = exact count)"),
+    worksheet_short_answer_count: int = Query(-1, description="Number of short answer questions for worksheet (-1 = all, 0 = none, N = exact count)"),
+    worksheet_complete_count: int = Query(-1, description="Number of complete/fill-in-blank questions for worksheet (-1 = all, 0 = none, N = exact count)"),
+    
+    # Question bank question counts
+    question_bank_multiple_choice_count: int = Query(-1, description="Number of multiple choice questions for question bank (-1 = all, 0 = none, N = exact count)"),
+    question_bank_true_false_count: int = Query(-1, description="Number of true/false questions for question bank (-1 = all, 0 = none, N = exact count)"),
+    question_bank_short_answer_count: int = Query(-1, description="Number of short answer questions for question bank (-1 = all, 0 = none, N = exact count)"),
+    question_bank_complete_count: int = Query(-1, description="Number of complete/fill-in-blank questions for question bank (-1 = all, 0 = none, N = exact count)"),
+    
+    # Mindmap parameters  
+    mindmap_width: int = Query(1200, description="Mindmap image width in pixels"),
+    mindmap_height: int = Query(800, description="Mindmap image height in pixels"),
+    
+    # General parameters
+    generate_pdf: bool = Query(False, description="Generate PDF files (default: False - generates DOCX)"),
+    html_parsing: bool = Query(False, description="Keep HTML markup"),
+    mongo_uri: str = Query(None, description="Override MongoDB URI"),
+    db_name: str = Query(None, description="Override DB name")
+):
+    """
+    V2 API: Unified endpoint to create mindmap, worksheet, and question bank for a document.
+    Creates folder structure: all_data/document_uuid/{mindmap.png, worksheet_with_solutions.[docx/pdf], worksheet_no_solutions.[docx/pdf], question_bank_with_solutions.[docx/pdf], question_bank_no_solutions.[docx/pdf]}
+    
+    Default format is DOCX. Files are converted to PDF only if generate_pdf=True.
+    Each document type (worksheet vs question bank) can have different question counts.
+    Generates both versions with and without solutions for worksheet and question bank.
+    
+    If document UUID exists and override=False, returns existing file paths.
+    If override=True, regenerates all files.
+    """
+    try:
+        import uuid as uuid_module
+        import os
+        import tempfile
+        
+        # Validate UUID format
+        try:
+            uuid_module.UUID(document_uuid)
+        except ValueError:
+            return {
+                "api_version": "2.0",
+                "endpoint": "create-all",
+                "success": False,
+                "error": "Invalid document UUID format"
+            }
+        
+        effective_mongo_uri = mongo_uri or MONGO_URI
+        effective_db_name = db_name or DB_NAME
+        
+        # Folder structure: all_data/document_uuid/
+        folder_path = f"all_data/{document_uuid}"
+        
+        # Check for existing files in S3
+        s3_service = get_s3_service()
+        try:
+            response = s3_service.s3_client.list_objects_v2(
+                Bucket=s3_service.bucket_name,
+                Prefix=folder_path
+            )
+            
+            existing_files = {}
+            if 'Contents' in response:
+                for obj in response['Contents']:
+                    key = obj['Key']
+                    public_url = f"{s3_service.endpoint_url.replace('dcdb150a91310324ecc43b417e14446b.r2.cloudflarestorage.com', 'pub-dcdb150a91310324ecc43b417e14446b.r2.dev')}/{key}"
+                    
+                    if key.endswith('mindmap.png'):
+                        existing_files['mindmap'] = public_url
+                    elif 'worksheet_with_solutions.' in key:
+                        existing_files['worksheet_with_solutions'] = public_url
+                    elif 'worksheet_no_solutions.' in key:
+                        existing_files['worksheet_no_solutions'] = public_url
+                    elif 'question_bank_with_solutions.' in key:
+                        existing_files['question_bank_with_solutions'] = public_url
+                    elif 'question_bank_no_solutions.' in key:
+                        existing_files['question_bank_no_solutions'] = public_url
+                        
+        except Exception as e:
+            logger.warning(f"Could not check existing files: {e}")
+            existing_files = {}
+        
+        # If files exist and override is False, return existing paths
+        if existing_files and not override:
+            return {
+                "api_version": "2.0",
+                "endpoint": "create-all",
+                "success": True,
+                "data": {
+                    "document_uuid": document_uuid,
+                    "folder_path": folder_path,
+                    "exists": True,
+                    "override_required": True,
+                    "existing_files": existing_files,
+                    "message": "Documents already exist. Use override=true to regenerate."
+                }
+            }
+        
+        # Create all documents
+        results = {
+            "document_uuid": document_uuid,
+            "folder_path": folder_path,
+            "created_files": {},
+            "errors": {},
+            "status": "success"
+        }
+        
+        # 1. Generate Mindmap
+        try:
+            # Get mindmap data from database first
+            mindmap_result = create_mindmap_from_ai_db(
+                document_uuid=document_uuid,
+                mongo_uri=effective_mongo_uri,
+                db_name=effective_db_name,
+                html_parsing=False,
+                include_raw_meta=False
+            )
+            
+            mindmap_data = mindmap_result.get("mindmap", {})
+            title = mindmap_result.get("title", f"mindmap_{document_uuid}")
+            
+            if mindmap_data:
+                # Generate image using mindmap service
+                mindmap_service = get_mindmap_service()
+                image_result = mindmap_service.generate_image_from_json(
+                    mindmap_json=mindmap_data,
+                    title=title,
+                    width=mindmap_width,
+                    height=mindmap_height
+                )
+                
+                if image_result["status"] == "success" and image_result.get("s3_key"):
+                    # Copy the file to the structured location
+                    mindmap_s3_key = f"{folder_path}/mindmap.png"
+                    
+                    try:
+                        copy_source = {
+                            'Bucket': s3_service.bucket_name,
+                            'Key': image_result["s3_key"]
+                        }
+                        s3_service.s3_client.copy_object(
+                            CopySource=copy_source,
+                            Bucket=s3_service.bucket_name,
+                            Key=mindmap_s3_key,
+                            MetadataDirective='COPY'
+                        )
+                        
+                        # Generate public URL
+                        mindmap_url = f"{s3_service.endpoint_url.replace('dcdb150a91310324ecc43b417e14446b.r2.cloudflarestorage.com', 'pub-dcdb150a91310324ecc43b417e14446b.r2.dev')}/{mindmap_s3_key}"
+                        
+                        results["created_files"]["mindmap"] = {
+                            "type": "mindmap",
+                            "format": "png",
+                            "s3_key": mindmap_s3_key,
+                            "public_url": mindmap_url,
+                            "standard_name": "mindmap"
+                        }
+                        
+                        # Optionally delete the original file
+                        try:
+                            s3_service.s3_client.delete_object(
+                                Bucket=s3_service.bucket_name,
+                                Key=image_result["s3_key"]
+                            )
+                        except:
+                            pass  # Ignore deletion errors
+                            
+                    except Exception as copy_error:
+                        results["errors"]["mindmap"] = f"Failed to copy mindmap to structured folder: {copy_error}"
+                        results["status"] = "partial"
+                else:
+                    results["errors"]["mindmap"] = image_result.get("message", "Failed to generate mindmap image")
+                    results["status"] = "partial"
+            else:
+                results["errors"]["mindmap"] = "No mindmap data found for this document"
+                results["status"] = "partial"
+        except Exception as e:
+            logger.error(f"Mindmap generation error: {e}")
+            results["errors"]["mindmap"] = str(e)
+            results["status"] = "partial"
+        
+        # 2. Generate Worksheet with solutions
+        try:
+            worksheet_result = generate_worksheet_with_custom_counts(
+                document_uuid, effective_mongo_uri, effective_db_name,
+                worksheet_multiple_choice_count, worksheet_true_false_count,
+                worksheet_short_answer_count, worksheet_complete_count,
+                include_solutions=True, generate_pdf=generate_pdf
+            )
+            
+            if worksheet_result["status"] == "success":
+                # Upload worksheet with specific folder structure
+                file_extension = worksheet_result.get("format", "docx")
+                worksheet_s3_key = f"{folder_path}/worksheet_with_solutions.{file_extension}"
+                
+                # Determine content type
+                content_type = 'application/pdf' if file_extension == 'pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                
+                # Upload the file
+                upload_result = s3_service.upload_file(
+                    local_file_path=worksheet_result["file_path"],
+                    s3_key=worksheet_s3_key,
+                    content_type=content_type
+                )
+                
+                if upload_result["status"] == "success":
+                    results["created_files"]["worksheet_with_solutions"] = {
+                        "type": "worksheet",
+                        "format": file_extension,
+                        "solutions": True,
+                        "s3_key": worksheet_s3_key,
+                        "public_url": upload_result["public_url"],
+                        "standard_name": "worksheet_with_solutions"
+                    }
+                    
+                    # Clean up local file
+                    try:
+                        os.remove(worksheet_result["file_path"])
+                    except:
+                        pass
+                else:
+                    results["errors"]["worksheet_with_solutions"] = upload_result.get("message", "Upload failed")
+                    results["status"] = "partial"
+            else:
+                results["errors"]["worksheet_with_solutions"] = worksheet_result.get("message", "Generation failed")
+                results["status"] = "partial"
+        except Exception as e:
+            results["errors"]["worksheet_with_solutions"] = str(e)
+            results["status"] = "partial"
+        
+        # 3. Generate Worksheet without solutions
+        try:
+            worksheet_result = generate_worksheet_with_custom_counts(
+                document_uuid, effective_mongo_uri, effective_db_name,
+                worksheet_multiple_choice_count, worksheet_true_false_count,
+                worksheet_short_answer_count, worksheet_complete_count,
+                include_solutions=False, generate_pdf=generate_pdf
+            )
+            
+            if worksheet_result["status"] == "success":
+                # Upload worksheet with specific folder structure
+                file_extension = worksheet_result.get("format", "docx")
+                worksheet_s3_key = f"{folder_path}/worksheet_no_solutions.{file_extension}"
+                
+                # Determine content type
+                content_type = 'application/pdf' if file_extension == 'pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                
+                # Upload the file
+                upload_result = s3_service.upload_file(
+                    local_file_path=worksheet_result["file_path"],
+                    s3_key=worksheet_s3_key,
+                    content_type=content_type
+                )
+                
+                if upload_result["status"] == "success":
+                    results["created_files"]["worksheet_no_solutions"] = {
+                        "type": "worksheet",
+                        "format": file_extension,
+                        "solutions": False,
+                        "s3_key": worksheet_s3_key,
+                        "public_url": upload_result["public_url"],
+                        "standard_name": "worksheet_no_solutions"
+                    }
+                    
+                    # Clean up local file
+                    try:
+                        os.remove(worksheet_result["file_path"])
+                    except:
+                        pass
+                else:
+                    results["errors"]["worksheet_no_solutions"] = upload_result.get("message", "Upload failed")
+                    results["status"] = "partial"
+            else:
+                results["errors"]["worksheet_no_solutions"] = worksheet_result.get("message", "Generation failed")
+                results["status"] = "partial"
+        except Exception as e:
+            results["errors"]["worksheet_no_solutions"] = str(e)
+            results["status"] = "partial"
+        
+        # 4. Generate Question Bank with solutions
+        try:
+            question_result = generate_question_bank_with_custom_counts(
+                document_uuid, effective_mongo_uri, effective_db_name,
+                question_bank_multiple_choice_count, question_bank_true_false_count,
+                question_bank_short_answer_count, question_bank_complete_count,
+                include_solutions=True, generate_pdf=generate_pdf
+            )
+            
+            if question_result["status"] == "success":
+                # Upload question bank with specific folder structure
+                file_extension = question_result.get("format", "docx")
+                question_s3_key = f"{folder_path}/question_bank_with_solutions.{file_extension}"
+                
+                # Determine content type
+                content_type = 'application/pdf' if file_extension == 'pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                
+                # Upload the file
+                upload_result = s3_service.upload_file(
+                    local_file_path=question_result["file_path"],
+                    s3_key=question_s3_key,
+                    content_type=content_type
+                )
+                
+                if upload_result["status"] == "success":
+                    results["created_files"]["question_bank_with_solutions"] = {
+                        "type": "question_bank",
+                        "format": file_extension,
+                        "solutions": True,
+                        "s3_key": question_s3_key,
+                        "public_url": upload_result["public_url"],
+                        "standard_name": "question_bank_with_solutions"
+                    }
+                    
+                    # Clean up local file
+                    try:
+                        os.remove(question_result["file_path"])
+                    except:
+                        pass
+                else:
+                    results["errors"]["question_bank_with_solutions"] = upload_result.get("message", "Upload failed")
+                    results["status"] = "partial"
+            else:
+                results["errors"]["question_bank_with_solutions"] = question_result.get("message", "Generation failed")
+                results["status"] = "partial"
+        except Exception as e:
+            results["errors"]["question_bank_with_solutions"] = str(e)
+            results["status"] = "partial"
+        
+        # 5. Generate Question Bank without solutions
+        try:
+            question_result = generate_question_bank_with_custom_counts(
+                document_uuid, effective_mongo_uri, effective_db_name,
+                question_bank_multiple_choice_count, question_bank_true_false_count,
+                question_bank_short_answer_count, question_bank_complete_count,
+                include_solutions=False, generate_pdf=generate_pdf
+            )
+            
+            if question_result["status"] == "success":
+                # Upload question bank with specific folder structure
+                file_extension = question_result.get("format", "docx")
+                question_s3_key = f"{folder_path}/question_bank_no_solutions.{file_extension}"
+                
+                # Determine content type
+                content_type = 'application/pdf' if file_extension == 'pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                
+                # Upload the file
+                upload_result = s3_service.upload_file(
+                    local_file_path=question_result["file_path"],
+                    s3_key=question_s3_key,
+                    content_type=content_type
+                )
+                
+                if upload_result["status"] == "success":
+                    results["created_files"]["question_bank_no_solutions"] = {
+                        "type": "question_bank",
+                        "format": file_extension,
+                        "solutions": False,
+                        "s3_key": question_s3_key,
+                        "public_url": upload_result["public_url"],
+                        "standard_name": "question_bank_no_solutions"
+                    }
+                    
+                    # Clean up local file
+                    try:
+                        os.remove(question_result["file_path"])
+                    except:
+                        pass
+                else:
+                    results["errors"]["question_bank_no_solutions"] = upload_result.get("message", "Upload failed")
+                    results["status"] = "partial"
+            else:
+                results["errors"]["question_bank_no_solutions"] = question_result.get("message", "Generation failed")
+                results["status"] = "partial"
+        except Exception as e:
+            results["errors"]["question_bank_no_solutions"] = str(e)
+            results["status"] = "partial"
+        
+        # Determine final status
+        if len(results["created_files"]) == 0:
+            results["status"] = "error"
+        elif len(results["errors"]) > 0:
+            results["status"] = "partial"
+        
+        results["summary"] = {
+            "total_requested": 5,  # mindmap, worksheet_with_solutions, worksheet_no_solutions, question_bank_with_solutions, question_bank_no_solutions
+            "successfully_created": len(results["created_files"]),
+            "failed": len(results["errors"]),
+            "success_rate": f"{len(results['created_files'])}/5"
+        }
+        
+        # Add question count summary
+        results["question_counts"] = {
+            "worksheet": {
+                "multiple_choice": worksheet_multiple_choice_count,
+                "true_false": worksheet_true_false_count,
+                "short_answer": worksheet_short_answer_count,
+                "complete": worksheet_complete_count
+            },
+            "question_bank": {
+                "multiple_choice": question_bank_multiple_choice_count,
+                "true_false": question_bank_true_false_count,
+                "short_answer": question_bank_short_answer_count,
+                "complete": question_bank_complete_count
+            }
+        }
+        
+        results["created_at"] = datetime.now().isoformat()
+        
+        return {
+            "api_version": "2.0",
+            "endpoint": "create-all",
+            "success": results["status"] in ["success", "partial"],
+            "data": results
+        }
+        
+    except Exception as e:
+        return {
+            "api_version": "2.0",
+            "endpoint": "create-all", 
+            "success": False,
+            "error": str(e),
+            "document_uuid": document_uuid
+        }
+
+
+# ===== FILE MANAGEMENT =====
+
+@app.get("/api/v2/files/list")
+def list_files_v2(
+    prefix: str = Query("", description="Filter files by prefix"),
+    limit: int = Query(50, description="Maximum number of files to return")
+):
+    """
+    V2 API: List files uploaded to S3/R2 storage.
+    """
+    result = list_uploaded_files(prefix, limit)
+    
+    return {
+        "api_version": "2.0",
+        "endpoint": "files/list",
+        "success": result.get("status") == "success",
+        "data": result
+    }
+
+
+@app.get("/api/v2/files/download/{file_key:path}")
+def download_file_v2(file_key: str):
+    """
+    V2 API: Download a file from S3/R2 storage.
+    """
+    # This returns a redirect, so we'll use the original function
+    return download_file_from_s3(file_key)
+
+
+# ===== API INFORMATION =====
+
+@app.get("/api/v2/info")
+def api_info_v2():
+    """
+    V2 API: Get API information and available endpoints.
+    """
+    return {
+        "api_version": "2.0",
+        "title": "QA Worksheet Generator API",
+        "description": "Unified API for generating worksheets, questions, and mindmaps",
+        "endpoint_groups": {
+            "worksheets_and_questions": {
+                "description": "Generate worksheets and question banks",
+                "endpoints": [
+                    "/api/v2/worksheets/generate",
+                    "/api/v2/questions/generate"
+                ]
+            },
+            "mindmaps": {
+                "description": "Generate and manage mindmap images",
+                "endpoints": [
+                    "/api/v2/mindmaps/generate",
+                    "/api/v2/mindmaps/generate-from-json",
+                    "/api/v2/mindmaps/search",
+                    "/api/v2/mindmaps/{document_uuid}"
+                ]
+            },
+            "status_and_health": {
+                "description": "System status and health checks",
+                "endpoints": [
+                    "/api/v2/status/pdf",
+                    "/api/v2/status/s3",
+                    "/api/v2/status/health"
+                ]
+            },
+            "lessons_and_documents": {
+                "description": "Search and manage documents and lessons",
+                "endpoints": [
+                    "/api/v2/documents/search",
+                    "/api/v2/documents/{document_uuid}",
+                    "/api/v2/lessons/search",
+                    "/api/v2/lessons/{lesson_identifier}"
+                ]
+            },
+            "unified": {
+                "description": "Create all document types at once",
+                "endpoints": [
+                    "/api/v2/create-all"
+                ]
+            },
+            "file_management": {
+                "description": "File storage and retrieval",
+                "endpoints": [
+                    "/api/v2/files/list",
+                    "/api/v2/files/download/{file_key:path}"
+                ]
+            }
+        },
+        "features": {
+            "uuid_based_document_management": True,
+            "override_existing_documents": True,
+            "s3_file_storage": True,
+            "pdf_generation": True,
+            "arabic_language_support": True,
+            "mindmap_image_generation": True
+        }
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Get configuration from environment
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 8000))
+    debug = os.getenv("DEBUG", "True").lower() == "true"
+    
+    print(f"Starting QA Worksheet Generator API v2.0")
+    print(f"Server: http://{host}:{port}")
+    print(f"API Documentation: http://{host}:{port}/docs")
+    print(f"API Info: http://{host}:{port}/api/v2/info")
+    
+    uvicorn.run(app, host=host, port=port, reload=debug)
