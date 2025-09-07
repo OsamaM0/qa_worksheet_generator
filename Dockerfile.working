@@ -28,13 +28,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     # Additional Playwright dependencies
     libxss1 \
-    libgconf-2-4 \
     libxrandr2 \
-    libasound2 \
     libpangocairo-1.0-0 \
     libatk1.0-0 \
     libcairo-gobject2 \
-    libgtk-3-0 \
     libgdk-pixbuf2.0-0 \
     libxcomposite1 \
     libxcursor1 \
@@ -44,20 +41,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxi6 \
     libxrender1 \
     libxtst6 \
-    # Fonts for proper rendering
+    # Core fonts
     fonts-liberation \
     fonts-dejavu \
     fonts-dejavu-core \
     fonts-dejavu-extra \
+    # Process management
+    procps \
+    # Additional dependencies
+    fontconfig \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install additional fonts in a separate step (more likely to fail)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
     fonts-noto-mono \
-    # Process management
-    procps \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && fc-cache -fv
+    && fc-cache -fv || true
 
 # Copy requirements first for better caching
 COPY requirements.txt .
