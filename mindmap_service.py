@@ -102,6 +102,9 @@ class MindMapImageGenerator:
                 screenshot_bytes = await diagram_element.screenshot(type=format)
             logger.debug(f"Screenshot taken, size: {len(screenshot_bytes)} bytes")
             
+            # Add watermark to the image
+            screenshot_bytes = self._add_watermark_to_image(screenshot_bytes)
+            
             return screenshot_bytes
             
         except Exception as e:
@@ -132,6 +135,90 @@ class MindMapImageGenerator:
                 logger.warning(f"Cleanup warnings: {'; '.join(cleanup_errors)}")
             else:
                 logger.debug("Browser resources cleaned up successfully")
+    
+    def _add_watermark_to_image(self, image_bytes: bytes) -> bytes:
+        """Add watermark to the generated PNG image"""
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            import io
+            
+            # Open the image from bytes
+            image = Image.open(io.BytesIO(image_bytes))
+            
+            # Create a drawing context
+            draw = ImageDraw.Draw(image)
+            
+            # Watermark box dimensions
+            box_width = 180
+            box_height = 70
+            box_x = 10  # 10px from left edge
+            box_y = 10  # 10px from top edge
+            
+            # Draw white box with border
+            box_coords = [box_x, box_y, box_x + box_width, box_y + box_height]
+            draw.rectangle(box_coords, fill='white', outline='white', width=1)
+            
+            # Text content
+            text_line1 = "Tahder +"
+            text_line2 = "Your Smart Learning Platform in Saudi Arabia"
+            text_line3 = "© 2022-2025 All rights reserved"
+            
+            # Try to load a font (fallback to default if not available)
+            try:
+                font_title = ImageFont.truetype("arial.ttf", 12)
+                font_small = ImageFont.truetype("arial.ttf", 9)
+            except:
+                try:
+                    font_title = ImageFont.load_default()
+                    font_small = ImageFont.load_default()
+                except:
+                    # If all else fails, use the draw methods without font
+                    font_title = None
+                    font_small = None
+            
+            # Calculate text positions
+            text_color = 'black'
+            line_spacing = 2
+            
+            # Position text in the box
+            text_x = box_x + 5  # 5px padding from left edge of box
+            text_y = box_y + 5  # 5px padding from top edge of box
+            
+            # Draw text lines
+            if font_title and font_small:
+                # Draw "Tahder +" in slightly larger font
+                draw.text((text_x, text_y), text_line1, fill=text_color, font=font_title)
+                
+                # Get text height for positioning next lines
+                bbox = draw.textbbox((0, 0), text_line1, font=font_title)
+                line1_height = bbox[3] - bbox[1]
+                
+                # Draw "All rights reserved"
+                text_y2 = text_y + line1_height + line_spacing
+                draw.text((text_x, text_y2), text_line2, fill=text_color, font=font_small)
+                
+                # Get text height for positioning last line
+                bbox = draw.textbbox((0, 0), text_line2, font=font_small)
+                line2_height = bbox[3] - bbox[1]
+                
+                # Draw "from 2022 - 2025"
+                text_y3 = text_y2 + line2_height + line_spacing
+                draw.text((text_x, text_y3), text_line3, fill=text_color, font=font_small)
+            else:
+                # Fallback if fonts are not available
+                draw.text((text_x, text_y), text_line1, fill=text_color)
+                draw.text((text_x, text_y + 15), text_line2, fill=text_color)
+                draw.text((text_x, text_y + 30), text_line3, fill=text_color)
+            
+            # Convert back to bytes
+            output_buffer = io.BytesIO()
+            image.save(output_buffer, format='PNG')
+            return output_buffer.getvalue()
+            
+        except Exception as e:
+            logger.warning(f"Failed to add watermark to image: {e}")
+            # Return original image if watermarking fails
+            return image_bytes
     
     def _create_html_content(self, mind_map_json: Dict[str, Any], width: int, height: int) -> str:
         """Create HTML content with GoJS mind map - exact copy from main_image.py"""
@@ -572,7 +659,10 @@ class MindMapImageGenerator:
             # Convert to bytes
             img_buffer = io.BytesIO()
             img.save(img_buffer, format='PNG')
-            return img_buffer.getvalue()
+            image_bytes = img_buffer.getvalue()
+            
+            # Add watermark to the fallback image
+            return self._add_watermark_to_image(image_bytes)
             
         except Exception as e:
             logger.error(f"Fallback image generation failed: {e}")
@@ -584,7 +674,10 @@ class MindMapImageGenerator:
             
             img_buffer = io.BytesIO()
             img.save(img_buffer, format='PNG')
-            return img_buffer.getvalue()
+            image_bytes = img_buffer.getvalue()
+            
+            # Add watermark even to error images
+            return self._add_watermark_to_image(image_bytes)
 
 
 class MindMapService:
