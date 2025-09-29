@@ -2380,12 +2380,12 @@ def create_all_documents_bulk(
     V2 API: Bulk version of create-all. Accepts a list of document UUIDs and returns a mapping
     from each UUID to the output of the single-document /api/v2/create-all endpoint.
     """
-    results: Dict[str, Any] = {}
+    results = []
 
     for idx in document_idxs:
         try:
             # Call the existing single-document function to ensure identical behavior/output
-            results[idx] = create_all_documents(
+            results.append( create_all_documents(
                 document_idx=idx,
                 override=override,
                 worksheet_multiple_choice_count=worksheet_multiple_choice_count,
@@ -2402,18 +2402,18 @@ def create_all_documents_bulk(
                 html_parsing=html_parsing,
                 mongo_uri=mongo_uri,
                 db_name=db_name
-            )
+            ))
         except Exception as e:
-            results[idx] = {
+            results.append( {
                 "api_version": "2.0",
                 "endpoint": "create-all",
                 "success": False,
                 "error": str(e),
                 "document_idx": idx
-            }
+            }   )
 
     # Determine overall success: True if all items succeeded, False otherwise
-    per_item_success = [bool(v.get("success")) if isinstance(v, dict) else False for v in results.values()]
+    per_item_success = [bool(v.get("success")) if isinstance(v, dict) else False for v in results]
     overall_success = len(per_item_success) > 0 and all(per_item_success)
 
     return {
