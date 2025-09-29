@@ -52,6 +52,13 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p logs temp uploads downloads
 
+# --- ADDED: create a non-root user and fix ownership (minimal changes only) ---
+# Create system group/user, ensure home exists, and give ownership to /app and runtime dirs
+RUN groupadd -r appuser \
+ && useradd -r -g appuser -d /home/appuser -s /sbin/nologin appuser \
+ && mkdir -p /home/appuser \
+ && chown -R appuser:appuser /app /home/appuser /logs /temp /uploads /downloads /ms-playwright || true
+
 # Expose port
 EXPOSE 8081
 
@@ -59,5 +66,8 @@ EXPOSE 8081
 HEALTHCHECK --interval=60s --timeout=30s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8081/docs || exit 1
 
+# Run as the unprivileged appuser (added)
+USER appuser
+
 # Start the application
-CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8081", "--reload"]
+CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8081"]
